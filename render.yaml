@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: device-distribution-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PORT
+        value: 5000
+
+  - type: web
+    name: device-distribution-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    routes:
+      - path: /*
+        destination: /index.html
+        type: rewrite
+    envVars:
+      - key: VITE_API_URL
+        sync: false
