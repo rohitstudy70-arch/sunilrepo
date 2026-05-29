@@ -30,6 +30,9 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/device-distribution';
 
+const maskedUri = MONGO_URI.replace(/:([^:@]+)@/, ':****@');
+console.log(`Connecting to MongoDB Atlas: ${maskedUri}`);
+
 mongoose.connect(MONGO_URI)
   .then(() => {
     console.log('Successfully connected to MongoDB.');
@@ -38,6 +41,7 @@ mongoose.connect(MONGO_URI)
     });
   })
   .catch((err) => {
-    console.error('Database connection failed:', err.message);
+    console.error('Database connection failed.');
+    console.error(err);
     process.exit(1);
   });
