@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Building2, Users, Smartphone, Wrench, ShieldAlert, TrendingUp, LogOut, 
   Sun, Moon, Search, ArrowLeft, Calendar, DollarSign, Plus, Upload, 
-  ShieldCheck, Eye, EyeOff, UserCheck, UserX, Trash2, ArrowUpDown
+  ShieldCheck, Eye, EyeOff, UserCheck, UserX, Trash2, ArrowUpDown,
+  Menu, X
 } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
@@ -52,6 +53,7 @@ export default function App() {
   const [currentPath, setCurrentPath] = useState('/');
   const [companyDetailId, setCompanyDetailId] = useState(null);
   const [agentDetailId, setAgentDetailId] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Authentication State
   const [loginMobile, setLoginMobile] = useState('');
@@ -159,11 +161,18 @@ export default function App() {
   if (currentPath === '/login') {
     return (
       <div className="login-container">
+        {/* Backdrop Glow Blobs */}
+        <div className="bg-glow-1"></div>
+        <div className="bg-glow-2"></div>
+
         <form className="login-card" onSubmit={handleLogin}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <p className="page-category">Authentication</p>
-            <h1 className="page-title" style={{ fontSize: '2.5rem' }}>Sign In</h1>
-            <p className="card-subtitle">Use your mobile number and password to sign in. Blocked or disabled accounts are denied immediately.</p>
+          <div className="login-logo">
+            <Smartphone size={24} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'center' }}>
+            <h1 className="page-title text-gradient" style={{ fontSize: '2.1rem' }}>Arshi GPS Hub</h1>
+            <p className="card-subtitle" style={{ fontSize: '0.85rem' }}>Device Distribution Management System</p>
           </div>
 
           {authError && <div className="alert alert-danger">{authError}</div>}
@@ -192,7 +201,7 @@ export default function App() {
             />
           </div>
 
-          <button type="submit" disabled={authLoading} className="btn btn-primary" style={{ width: '100%' }}>
+          <button type="submit" disabled={authLoading} className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }}>
             {authLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </form>
@@ -200,93 +209,157 @@ export default function App() {
     );
   }
 
+  const navItems = [
+    { name: 'Dashboard', path: '/', icon: <TrendingUp size={18} />, perm: null },
+    { name: 'Companies', path: '/companies', icon: <Building2 size={18} />, perm: 'COMPANY' },
+    { name: 'Agents', path: '/agents', icon: <Users size={18} />, perm: 'AGENTS' },
+    { name: 'Installations', path: '/installations', icon: <Wrench size={18} />, perm: 'INSTALL' },
+    { name: 'Devices', path: '/devices', icon: <Smartphone size={18} />, perm: 'INVENTORY' },
+    { name: 'Users', path: '/users', icon: <ShieldAlert size={18} />, perm: 'USERS' },
+    { name: 'Reports', path: '/reports', icon: <TrendingUp size={18} />, perm: 'REPORTS' }
+  ];
+
   // Dashboard Layout & Header wrapper
   return (
-    <div className="app-container">
-      <header className="header">
-        <div className="header-content">
-          <div className="header-user-info">
-            <p className="user-name">Signed in as <span>{user?.name}</span></p>
-            <p className="user-role">{user?.role}</p>
+    <>
+      {/* Background Decorative Glows */}
+      <div className="bg-glow-1"></div>
+      <div className="bg-glow-2"></div>
+
+      {/* Mobile Sidebar Overlay */}
+      {sidebarOpen && (
+        <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>
+      )}
+
+      <div className="app-layout">
+        {/* Responsive Left Sidebar */}
+        <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
+          <div className="sidebar-header">
+            <div className="sidebar-brand-icon">
+              <Smartphone size={20} />
+            </div>
+            <span className="sidebar-brand-name">Arshi GPS Hub</span>
           </div>
-          <div className="header-actions">
-            <button 
-              onClick={() => setDarkMode(!darkMode)} 
-              className="btn btn-secondary" 
-              style={{ width: '40px', height: '40px', padding: 0 }}
-              title="Toggle Theme"
-            >
-              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-            <button onClick={handleLogout} className="btn btn-secondary" style={{ gap: '8px' }}>
+
+          <div className="sidebar-menu">
+            {navItems.map((item, idx) => {
+              if (item.perm && !hasPerm(item.perm)) return null;
+              const isActive = currentPath === item.path;
+              return (
+                <div 
+                  key={idx} 
+                  className={`sidebar-item ${isActive ? 'active' : ''}`}
+                  onClick={() => {
+                    setCurrentPath(item.path);
+                    setCompanyDetailId(null);
+                    setAgentDetailId(null);
+                    setSidebarOpen(false);
+                  }}
+                >
+                  {item.icon}
+                  <span>{item.name}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="sidebar-footer">
+            <button onClick={handleLogout} className="btn btn-secondary" style={{ width: '100%', gap: '8px' }}>
               <LogOut size={16} /> Logout
             </button>
           </div>
-        </div>
-      </header>
+        </aside>
 
-      <main className="main-content">
-        {currentPath === '/' && (
-          <DashboardView 
-            user={user} 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-            setCompanyDetailId={setCompanyDetailId}
-            setAgentDetailId={setAgentDetailId}
-          />
-        )}
-        {currentPath === '/companies' && !companyDetailId && (
-          <CompaniesView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-            setCompanyDetailId={setCompanyDetailId}
-          />
-        )}
-        {currentPath === '/companies' && companyDetailId && (
-          <CompanyDetailView 
-            companyId={companyDetailId} 
-            setCompanyDetailId={setCompanyDetailId} 
-          />
-        )}
-        {currentPath === '/agents' && !agentDetailId && (
-          <AgentsView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-            setAgentDetailId={setAgentDetailId}
-          />
-        )}
-        {currentPath === '/agents' && agentDetailId && (
-          <AgentDetailView 
-            agentId={agentDetailId} 
-            setAgentDetailId={setAgentDetailId} 
-          />
-        )}
-        {currentPath === '/devices' && (
-          <DevicesView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-          />
-        )}
-        {currentPath === '/installations' && (
-          <InstallationsView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-          />
-        )}
-        {currentPath === '/users' && (
-          <UsersView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-          />
-        )}
-        {currentPath === '/reports' && (
-          <ReportsView 
-            hasPerm={hasPerm} 
-            setPath={setCurrentPath} 
-          />
-        )}
-      </main>
-    </div>
+        {/* Main Wrapper */}
+        <div className="app-main-wrapper">
+          <header className="header">
+            <div className="header-content">
+              <button className="mobile-nav-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+                {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+              </button>
+
+              <div className="header-user-info">
+                <p className="user-name">Signed in as <span>{user?.name}</span></p>
+                <p className="user-role">{user?.role}</p>
+              </div>
+
+              <div className="header-actions">
+                <button 
+                  onClick={() => setDarkMode(!darkMode)} 
+                  className="btn btn-secondary" 
+                  style={{ width: '40px', height: '40px', padding: 0 }}
+                  title="Toggle Theme"
+                >
+                  {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+                </button>
+              </div>
+            </div>
+          </header>
+
+          <main className="main-content animate-fade-up">
+            {currentPath === '/' && (
+              <DashboardView 
+                user={user} 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+                setCompanyDetailId={setCompanyDetailId}
+                setAgentDetailId={setAgentDetailId}
+              />
+            )}
+            {currentPath === '/companies' && !companyDetailId && (
+              <CompaniesView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+                setCompanyDetailId={setCompanyDetailId}
+              />
+            )}
+            {currentPath === '/companies' && companyDetailId && (
+              <CompanyDetailView 
+                companyId={companyDetailId} 
+                setCompanyDetailId={setCompanyDetailId} 
+              />
+            )}
+            {currentPath === '/agents' && !agentDetailId && (
+              <AgentsView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+                setAgentDetailId={setAgentDetailId}
+              />
+            )}
+            {currentPath === '/agents' && agentDetailId && (
+              <AgentDetailView 
+                agentId={agentDetailId} 
+                setAgentDetailId={setAgentDetailId} 
+              />
+            )}
+            {currentPath === '/devices' && (
+              <DevicesView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+              />
+            )}
+            {currentPath === '/installations' && (
+              <InstallationsView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+              />
+            )}
+            {currentPath === '/users' && (
+              <UsersView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+              />
+            )}
+            {currentPath === '/reports' && (
+              <ReportsView 
+                hasPerm={hasPerm} 
+                setPath={setCurrentPath} 
+              />
+            )}
+          </main>
+        </div>
+      </div>
+    </>
   );
 }
 
