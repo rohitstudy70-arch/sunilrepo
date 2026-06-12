@@ -49,6 +49,10 @@ async function seed() {
     id: uuidv4(), name: 'sunil', mobile: '9761334377',
     password: hashedPwd, role: 'ADMIN', permissions: ALL_PERMS
   });
+  const adminUser2 = await User.create({
+    id: uuidv4(), name: 'arshi@gps', mobile: 'arshi@gps',
+    password: hashedPwd, role: 'ADMIN', permissions: ALL_PERMS
+  });
   const user2 = await User.create({
     id: uuidv4(), name: 'ronijaat', mobile: '7310986315',
     password: hashedPwd, role: 'USER', permissions: ['COMPANY','AGENTS','INVENTORY','INSTALL','AGENT_SALE','COMPANY_DEVICE_ADD']
@@ -61,7 +65,7 @@ async function seed() {
     id: uuidv4(), name: 'Hemant', mobile: '7895490270',
     password: hashedPwd, role: 'USER', permissions: ['INSTALL','INVENTORY']
   });
-  console.log('Users created: sunil (ADMIN), ronijaat, suraj, Hemant');
+  console.log('Users created: sunil (ADMIN), arshi@gps (ADMIN), ronijaat, suraj, Hemant');
 
   // ─────────────────────── COMPANIES ───────────────────────
   const compWatsoo = await Company.create({ id: uuidv4(), name: 'WATSOO', phone: '9289046951', address: 'GURGAON', basePrice: 5500 });
