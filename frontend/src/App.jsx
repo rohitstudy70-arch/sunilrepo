@@ -252,7 +252,7 @@ export default function App() {
   const navItems = [
     { name: 'Dashboard', path: '/', icon: <TrendingUp size={18} />, perm: null },
     { name: 'Companies', path: '/companies', icon: <Building2 size={18} />, perm: 'COMPANY' },
-    { name: 'Agents', path: '/agents', icon: <Users size={18} />, perm: 'AGENTS' },
+    { name: 'Partners', path: '/agents', icon: <Users size={18} />, perm: 'AGENTS' },
     { name: 'Installations', path: '/installations', icon: <Wrench size={18} />, perm: 'INSTALL' },
     { name: 'Devices', path: '/devices', icon: <Smartphone size={18} />, perm: 'INVENTORY' },
     { name: 'Users', path: '/users', icon: <ShieldAlert size={18} />, perm: 'USERS' },
@@ -423,16 +423,16 @@ function DashboardView({ user, hasPerm, setPath, setCompanyDetailId, setAgentDet
       icon: <Building2 size={24} />
     },
     {
-      title: 'Agent Ledger',
-      desc: 'Track agents, sales, commissions, and performance summaries.',
-      badge: 'Agents',
+      title: 'Partner Ledger',
+      desc: 'Track partners, sales, commissions, and performance summaries.',
+      badge: 'Partners',
       path: '/agents',
       perm: 'AGENTS',
       icon: <Users size={24} />
     },
     {
       title: 'Installations',
-      desc: 'Search and review customer installations with device and agent context.',
+      desc: 'Search and review customer installations with device and partner context.',
       badge: 'Install',
       path: '/installations',
       perm: 'INSTALL',
@@ -470,7 +470,7 @@ function DashboardView({ user, hasPerm, setPath, setCompanyDetailId, setAgentDet
         <div className="page-title-group">
           <p className="page-category">Management Hub</p>
           <h1 className="page-title">Quick Links</h1>
-          <p className="card-subtitle">Open workflows for company activity, agent operations, device inventory, installations, user management, and reports.</p>
+          <p className="card-subtitle">Open workflows for company activity, partner operations, device inventory, installations, user management, and reports.</p>
         </div>
       </div>
 
