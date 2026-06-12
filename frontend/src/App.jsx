@@ -138,9 +138,9 @@ export default function App() {
 
   // Route Guard routing logic
   useEffect(() => {
-    if (!token) {
+    if (!token && currentPath !== '/users') {
       setCurrentPath('/login');
-    } else if (currentPath === '/login') {
+    } else if (token && currentPath === '/login') {
       setCurrentPath('/');
     }
   }, [token, currentPath]);
@@ -204,7 +204,32 @@ export default function App() {
           <button type="submit" disabled={authLoading} className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }}>
             {authLoading ? 'Signing in...' : 'Sign In'}
           </button>
+
+          <p style={{ textAlign: 'center', fontSize: '0.85rem', marginTop: '4px' }}>
+            <a 
+              href="#" 
+              onClick={(e) => { e.preventDefault(); setCurrentPath('/users'); }} 
+              className="table-link"
+              style={{ fontWeight: 600 }}
+            >
+              First-time setup / manage users
+            </a>
+          </p>
         </form>
+      </div>
+    );
+  }
+
+  if (!token && currentPath === '/users') {
+    return (
+      <div className="login-container">
+        {/* Backdrop Glow Blobs */}
+        <div className="bg-glow-1"></div>
+        <div className="bg-glow-2"></div>
+
+        <div style={{ width: '100%', maxWidth: '440px', zIndex: 10 }}>
+          <UsersView hasPerm={() => false} setPath={setCurrentPath} isSetupMode={true} />
+        </div>
       </div>
     );
   }
@@ -2225,7 +2250,7 @@ function InstallationsView({ hasPerm, setPath }) {
 // ==========================================
 // 8. SECURITY / USER ACCESS CONTROL
 // ==========================================
-function UsersView({ hasPerm, setPath }) {
+function UsersView({ hasPerm, setPath, isSetupMode = false }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -2350,6 +2375,65 @@ function UsersView({ hasPerm, setPath }) {
       setter([...list, perm]);
     }
   };
+
+  if (isSetupMode) {
+    return (
+      <form className="form-card animate-fade-up" onSubmit={handleCreateUser}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'center', marginBottom: '10px' }}>
+          <h2 className="form-card-title" style={{ border: 'none', padding: 0, fontSize: '1.75rem', justifyContent: 'center', display: 'flex' }}>First-Time Setup</h2>
+          <p className="card-subtitle">Create the primary administrator account to get started.</p>
+        </div>
+
+        {alert.show && (
+          <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
+            {alert.msg}
+          </div>
+        )}
+
+        <div className="form-group">
+          <label className="form-label">Full Name</label>
+          <input 
+            type="text" 
+            required 
+            placeholder="Enter full name" 
+            className="form-input" 
+            value={name}
+            onChange={e => setName(e.target.value)}
+          />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Mobile/Username</label>
+          <input 
+            type="text" 
+            required 
+            placeholder="Enter mobile number" 
+            className="form-input" 
+            value={mobile}
+            onChange={e => setMobile(e.target.value)}
+          />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Password</label>
+          <input 
+            type="password" 
+            required 
+            placeholder="Enter secure password" 
+            className="form-input" 
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+          />
+        </div>
+
+        <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }}>
+          Register Administrator
+        </button>
+
+        <button type="button" onClick={() => setPath('/login')} className="btn btn-secondary" style={{ width: '100%' }}>
+          Back to Login
+        </button>
+      </form>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
