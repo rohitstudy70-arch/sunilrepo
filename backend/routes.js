@@ -528,7 +528,19 @@ router.post('/installations', protect, checkPermission('INSTALL'), async (req, r
 // ==========================================
 
 // GET all users
-router.get('/users', protect, checkPermission('USERS'), async (req, res) => {
+router.get('/users', async (req, res, next) => {
+  try {
+    const userCount = await User.countDocuments();
+    if (userCount === 0) {
+      return res.json({ users: [], isFirstTimeSetup: true });
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  protect(req, res, () => {
+    checkPermission('USERS')(req, res, next);
+  });
+}, async (req, res) => {
   try {
     const users = await User.find({}).sort({ createdAt: -1 });
     // Remove passwords before sending
@@ -549,7 +561,19 @@ router.get('/users', protect, checkPermission('USERS'), async (req, res) => {
 });
 
 // POST create user
-router.post('/users', protect, checkPermission('USERS'), async (req, res) => {
+router.post('/users', async (req, res, next) => {
+  try {
+    const userCount = await User.countDocuments();
+    if (userCount === 0) {
+      return next();
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  protect(req, res, () => {
+    checkPermission('USERS')(req, res, next);
+  });
+}, async (req, res) => {
   try {
     const { name, mobile, password, role, permissions } = req.body;
     if (!name || !mobile || !password || !role) {
@@ -564,12 +588,21 @@ router.post('/users', protect, checkPermission('USERS'), async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // If this is the first user, force role to ADMIN and give all permissions
+    const userCount = await User.countDocuments();
+    const finalRole = userCount === 0 ? 'ADMIN' : role;
+    const finalPermissions = userCount === 0 ? [
+      'COMPANY', 'COMPANY_CREATE', 'COMPANY_DEVICE_ADD', 'COMPANY_PAYMENT', 'COMPANY_DETAILS',
+      'AGENTS', 'AGENT_CREATE', 'AGENT_SALE', 'AGENT_PAYMENT', 'AGENT_DETAILS',
+      'INVENTORY', 'INSTALL', 'USERS', 'REPORTS'
+    ] : permissions;
+
     const user = new User({
       name,
       mobile,
       password: hashedPassword,
-      role,
-      permissions: permissions || []
+      role: finalRole,
+      permissions: finalPermissions || []
     });
     await user.save();
 
