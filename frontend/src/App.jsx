@@ -2253,6 +2253,7 @@ function InstallationsView({ hasPerm, setPath }) {
 function UsersView({ hasPerm, setPath, isSetupMode = false }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [firstTimeSetupAllowed, setFirstTimeSetupAllowed] = useState(null);
 
   // Create User Form
   const [name, setName] = useState('');
@@ -2281,9 +2282,17 @@ function UsersView({ hasPerm, setPath, isSetupMode = false }) {
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users || []);
+        if (data.isFirstTimeSetup) {
+          setFirstTimeSetupAllowed(true);
+        } else {
+          setFirstTimeSetupAllowed(false);
+        }
+      } else if (res.status === 401 || res.status === 403) {
+        setFirstTimeSetupAllowed(false);
       }
     } catch (err) {
       console.error(err);
+      setFirstTimeSetupAllowed(false);
     } finally {
       setLoading(false);
     }
@@ -2375,6 +2384,28 @@ function UsersView({ hasPerm, setPath, isSetupMode = false }) {
       setter([...list, perm]);
     }
   };
+
+  if (isSetupMode && loading) {
+    return (
+      <div className="form-card animate-fade-up" style={{ textAlign: 'center', padding: '40px' }}>
+        <p className="card-subtitle">Checking system configuration status...</p>
+      </div>
+    );
+  }
+
+  if (isSetupMode && firstTimeSetupAllowed === false) {
+    return (
+      <div className="form-card animate-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'center' }}>
+        <div>
+          <h2 className="form-card-title" style={{ border: 'none', padding: 0, fontSize: '1.5rem', justifyContent: 'center', display: 'flex', color: 'var(--danger-text)' }}>Setup Locked</h2>
+          <p className="card-subtitle" style={{ marginTop: '10px' }}>An administrator account has already been registered on this system. First-time setup is disabled.</p>
+        </div>
+        <button type="button" onClick={() => setPath('/login')} className="btn btn-primary" style={{ width: '100%' }}>
+          Go to Login
+        </button>
+      </div>
+    );
+  }
 
   if (isSetupMode) {
     return (
