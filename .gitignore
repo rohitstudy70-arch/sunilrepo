@@ -8,3 +8,4 @@ scraped_html/
 dist/
 build/
 *.log
+scratch/

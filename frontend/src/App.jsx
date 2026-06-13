@@ -1,1846 +1,1635 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Building2, Users, Smartphone, Wrench, ShieldAlert, TrendingUp, LogOut, 
-  Sun, Moon, Search, ArrowLeft, Calendar, DollarSign, Plus, Upload, 
-  ShieldCheck, Eye, EyeOff, UserCheck, UserX, Trash2, ArrowUpDown,
-  Menu, X
-} from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// ==========================================
-// UTILITY FUNCTIONS
-// ==========================================
-
-const fileToBase64 = (file) => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = error => reject(error);
-  });
-};
+// ─────────────────────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────────────────────
 
 const getHeaders = () => {
   const token = localStorage.getItem('token');
   return {
     'Content-Type': 'application/json',
-    'Authorization': token ? `Bearer ${token}` : ''
+    Authorization: token ? `Bearer ${token}` : '',
   };
 };
 
-const formatCurrency = (num) => {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0
-  }).format(num || 0);
-};
+const fileToB64 = (file) =>
+  new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => res(reader.result);
+    reader.onerror = rej;
+  });
 
-const formatDate = (dateStr) => {
-  if (!dateStr) return '';
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-IN');
-};
+const today = () => new Date().toISOString().split('T')[0];
 
-const exportToExcel = (headers, rows, filename) => {
+const exportToCSV = (headers, rows, filename) => {
+  const escapeCsv = (val) => {
+    if (val === null || val === undefined) return '';
+    const str = String(val).replace(/"/g, '""');
+    return str.includes(',') || str.includes('\n') || str.includes('"') ? `"${str}"` : str;
+  };
   const csvContent = [
-    headers.join(','),
-    ...rows.map(e => e.map(val => `"${String(val !== undefined && val !== null ? val : '').replace(/"/g, '""')}"`).join(","))
-  ].join("\n");
+    headers.map(escapeCsv).join(','),
+    ...rows.map(row => row.map(escapeCsv).join(','))
+  ].join('\n');
+  
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.setAttribute("href", url);
-  link.setAttribute("download", filename || "export.csv");
+  link.setAttribute("download", filename);
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
 };
 
-// ==========================================
-// MAIN COMPONENT
-// ==========================================
+// ─────────────────────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────────────────────
+
+function Toast({ msg, type, onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3500);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  return (
+    <div className={`fixed bottom-6 right-6 z-[9999] px-5 py-3 rounded-2xl text-sm font-medium shadow-lg transition-all transform animate-fade-up ${
+      type === 'danger' ? 'bg-red-600 text-white' : 'bg-slate-950 text-white dark:bg-white dark:text-slate-950'
+    }`}>
+      {msg}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// ROOT APP
+// ─────────────────────────────────────────────────────────────
+
 export default function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [user, setUser] = useState(null);
-  const [darkMode, setDarkMode] = useState(true);
-  const [currentPath, setCurrentPath] = useState('/');
+  const [path, setPath] = useState('/');
   const [companyDetailId, setCompanyDetailId] = useState(null);
   const [agentDetailId, setAgentDetailId] = useState(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  
+  // Theme Night Mode (sync across all pages)
+  const [isDark, setIsDark] = useState(localStorage.getItem('theme') === 'dark');
 
-  // Authentication State
-  const [loginMobile, setLoginMobile] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [authError, setAuthError] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
+  // Security Mask toggle (masked purchase prices/profits)
+  const [maskData, setMaskData] = useState(localStorage.getItem('mask_data') !== 'false');
 
-  // Theme Sync
+  const showToast = (msg, type = 'success') => setToast({ msg, type });
+
+  const toggleMask = () => {
+    const newVal = !maskData;
+    setMaskData(newVal);
+    localStorage.setItem('mask_data', String(newVal));
+    showToast(newVal ? 'Financial values hidden' : 'Financial values visible');
+  };
+
+  const toggleTheme = () => {
+    const newVal = !isDark;
+    setIsDark(newVal);
+    localStorage.setItem('theme', newVal ? 'dark' : 'light');
+    showToast(newVal ? 'Switched to Night Mode' : 'Switched to Day Mode');
+  };
+
   useEffect(() => {
-    const doc = document.documentElement;
-    if (darkMode) {
-      doc.classList.add('dark');
+    if (isDark) {
+      document.documentElement.classList.add('dark');
     } else {
-      doc.classList.remove('dark');
+      document.documentElement.classList.remove('dark');
     }
-  }, [darkMode]);
+  }, [isDark]);
 
-  // Load User Details if token exists
+  // Token -> fetch user details
   useEffect(() => {
     if (token) {
       localStorage.setItem('token', token);
-      fetchUser();
+      fetchMe();
     } else {
       localStorage.removeItem('token');
       setUser(null);
     }
   }, [token]);
 
-  const fetchUser = async () => {
+  const fetchMe = async () => {
     try {
       const res = await fetch(`${API_URL}/auth/me`, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
       } else {
-        handleLogout();
+        doLogout();
       }
-    } catch (err) {
-      console.error('Fetch user failed:', err);
-      handleLogout();
+    } catch {
+      doLogout();
     }
   };
 
-  const handleLogin = async (e) => {
+  const doLogout = () => {
+    localStorage.removeItem('token');
+    setToken('');
+    setUser(null);
+    setPath('/login');
+  };
+
+  const hasPerm = (perm) => {
+    if (!user) return false;
+    if (user.role === 'ADMIN') return true;
+    return user.permissions?.includes(perm);
+  };
+
+  // Route guard
+  useEffect(() => {
+    if (!token && path !== '/users') setPath('/login');
+    else if (token && path === '/login') setPath('/');
+  }, [token, path]);
+
+  const nav = (p) => { 
+    setPath(p); 
+    setCompanyDetailId(null); 
+    setAgentDetailId(null); 
+    window.scrollTo(0, 0);
+  };
+
+  // Helper formatting currencies
+  const fmt = (num) => {
+    if (maskData) return '₹••••';
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      maximumFractionDigits: 0,
+    }).format(num || 0);
+  };
+
+  const fmtDate = (d) => {
+    if (!d) return '';
+    return new Date(d).toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  if (!token) {
+    return (
+      <div className={`app-shell${isDark ? ' dark' : ''}`}>
+        <LoginPage onLogin={setToken} showToast={showToast} nav={nav} />
+        {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      </div>
+    );
+  }
+
+  let page;
+  if (path === '/') {
+    page = <DashboardPage user={user} nav={nav} hasPerm={hasPerm} isDark={isDark} toggleTheme={toggleTheme} />;
+  } else if (path === '/companies' && !companyDetailId) {
+    page = (
+      <CompaniesPage 
+        user={user} 
+        hasPerm={hasPerm} 
+        nav={nav} 
+        onDetail={setCompanyDetailId} 
+        showToast={showToast} 
+        maskData={maskData} 
+        toggleMask={toggleMask} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/companies' && companyDetailId) {
+    page = (
+      <CompanyDetailPage 
+        id={companyDetailId} 
+        nav={nav} 
+        hasPerm={hasPerm} 
+        showToast={showToast} 
+        maskData={maskData} 
+        toggleMask={toggleMask} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/agents' && !agentDetailId) {
+    page = (
+      <AgentsPage 
+        user={user} 
+        hasPerm={hasPerm} 
+        nav={nav} 
+        onDetail={setAgentDetailId} 
+        showToast={showToast} 
+        maskData={maskData} 
+        toggleMask={toggleMask} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/agents' && agentDetailId) {
+    page = (
+      <AgentDetailPage 
+        id={agentDetailId} 
+        nav={nav} 
+        hasPerm={hasPerm} 
+        showToast={showToast} 
+        maskData={maskData} 
+        toggleMask={toggleMask} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/devices') {
+    page = (
+      <DevicesPage 
+        user={user}
+        hasPerm={hasPerm} 
+        nav={nav} 
+        showToast={showToast} 
+        isDark={isDark} 
+        toggleTheme={toggleTheme} 
+        maskData={maskData} 
+        toggleMask={toggleMask} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/installations') {
+    page = (
+      <InstallationsPage 
+        user={user}
+        hasPerm={hasPerm} 
+        nav={nav} 
+        showToast={showToast} 
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/reports') {
+    page = (
+      <ReportsPage 
+        user={user}
+        hasPerm={hasPerm} 
+        nav={nav} 
+        maskData={maskData}
+        fmt={fmt}
+        fmtDate={fmtDate}
+      />
+    );
+  } else if (path === '/users') {
+    page = (
+      <UsersPage 
+        user={user} 
+        hasPerm={hasPerm} 
+        nav={nav} 
+        showToast={showToast} 
+      />
+    );
+  } else {
+    page = <DashboardPage user={user} nav={nav} hasPerm={hasPerm} isDark={isDark} toggleTheme={toggleTheme} />;
+  }
+
+  return (
+    <div className={`app-shell${isDark ? ' dark' : ''}`}>
+      {/* HEADER — exact visual parity with original site */}
+      <header className="border-b border-slate-200 bg-white/90 px-6 py-4 dark:border-slate-800 dark:bg-slate-950/90 sticky top-0 z-50 backdrop-blur">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div>
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Signed in as <span className="font-semibold text-slate-900 dark:text-slate-100">{user?.name || '...'}</span>
+              </p>
+              <p className="text-xs uppercase tracking-[0.28em] text-slate-400 dark:text-slate-500">{user?.role || 'USER'}</p>
+            </div>
+          </div>
+          {/* Navigation links */}
+          <nav className="hidden sm:flex items-center gap-1">
+            {[
+              { p: '/', label: 'Dashboard' },
+              hasPerm('COMPANY') && { p: '/companies', label: 'Companies' },
+              hasPerm('AGENTS') && { p: '/agents', label: 'Partners' },
+              hasPerm('INVENTORY') && { p: '/devices', label: 'Devices' },
+              hasPerm('INSTALL') && { p: '/installations', label: 'Installs' },
+              hasPerm('REPORTS') && { p: '/reports', label: 'Reports' },
+              hasPerm('USERS') && { p: '/users', label: 'Users' },
+            ].filter(Boolean).map(item => (
+              <button
+                key={item.p}
+                onClick={() => nav(item.p)}
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                  path === item.p
+                    ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleTheme}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              {isDark ? '☀️ Day' : '🌙 Night'}
+            </button>
+            <button
+              onClick={doLogout}
+              className="rounded-full bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition"
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* PAGE CONTAINER */}
+      <div className="app-content">
+        {page}
+      </div>
+
+      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// LOGIN PAGE
+// ─────────────────────────────────────────────────────────────
+
+function LoginPage({ onLogin, showToast, nav }) {
+  const [mobile, setMobile] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
     e.preventDefault();
-    setAuthError('');
-    setAuthLoading(true);
+    setLoading(true);
     try {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mobile: loginMobile, password: loginPassword })
+        body: JSON.stringify({ mobile, password }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setToken(data.token);
-        setUser(data.user);
-        setCurrentPath('/');
+      if (res.ok && data.token) {
+        onLogin(data.token);
       } else {
-        setAuthError(data.error || 'Login failed');
+        showToast(data.error || 'Invalid credentials', 'danger');
       }
-    } catch (err) {
-      setAuthError('Connection error. Is backend server running?');
-    } finally {
-      setAuthLoading(false);
+    } catch {
+      showToast('Network error', 'danger');
     }
+    setLoading(false);
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    setToken('');
-    setUser(null);
-    setCurrentPath('/login');
-  };
-
-  // Permission Checker helper
-  const hasPerm = (perm) => {
-    if (!user) return false;
-    if (user.role === 'ADMIN') return true;
-    return user.permissions && user.permissions.includes(perm);
-  };
-
-  // Route Guard routing logic
-  useEffect(() => {
-    if (!token && currentPath !== '/users') {
-      setCurrentPath('/login');
-    } else if (token && currentPath === '/login') {
-      setCurrentPath('/');
-    }
-  }, [token, currentPath]);
-
-  // Render Loader
-  if (token && !user) {
-    return (
-      <div className="login-container">
-        <div className="login-card" style={{ textAlign: 'center', gap: '16px' }}>
-          <h2 className="page-title">Loading...</h2>
-          <p className="card-subtitle">Verifying your secure credentials</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Auth Layout (Login)
-  if (currentPath === '/login') {
-    return (
-      <div className="login-container">
-        {/* Backdrop Glow Blobs */}
-        <div className="bg-glow-1"></div>
-        <div className="bg-glow-2"></div>
-
-        <form className="login-card" onSubmit={handleLogin}>
-          <div className="login-logo">
-            <Smartphone size={24} />
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'center' }}>
-            <h1 className="page-title text-gradient" style={{ fontSize: '2.1rem' }}>Arshi GPS Hub</h1>
-            <p className="card-subtitle" style={{ fontSize: '0.85rem' }}>Device Distribution Management System</p>
-          </div>
-
-          {authError && <div className="alert alert-danger">{authError}</div>}
-
-          <div className="form-group">
-            <label className="form-label">Username/Mobile</label>
-            <input 
-              type="text" 
-              required 
-              placeholder="Enter mobile number or username" 
-              className="form-input" 
-              value={loginMobile}
-              onChange={(e) => setLoginMobile(e.target.value)}
+  return (
+    <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex items-center justify-center px-4 transition-colors">
+      <div className="rounded-3xl border border-slate-200 bg-white/90 p-8 shadow-sm w-full max-w-sm dark:border-slate-800 dark:bg-slate-900/90 backdrop-blur">
+        <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400 mb-1">Sign in</p>
+        <h1 className="text-3xl font-semibold text-slate-950 dark:text-white mb-2">Welcome back</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">Use your mobile number or username. Blocked accounts cannot sign in.</p>
+        
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1 block">
+              Mobile / Username <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              required
+              placeholder="e.g. 9761334377 or arshi@gps"
+              value={mobile}
+              onChange={e => setMobile(e.target.value)}
+              className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400 transition"
             />
           </div>
-
-          <div className="form-group">
-            <label className="form-label">Password</label>
-            <input 
-              type="password" 
-              required 
-              placeholder="Enter password" 
-              className="form-input" 
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
+          <div>
+            <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1 block">
+              Password <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="password"
+              required
+              placeholder="••••••"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400 transition"
             />
           </div>
-
-          <button type="submit" disabled={authLoading} className="btn btn-primary" style={{ width: '100%', marginTop: '8px' }}>
-            {authLoading ? 'Signing in...' : 'Sign In'}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition disabled:opacity-50"
+          >
+            {loading ? 'Signing in...' : 'Sign in'}
           </button>
-
-          <p style={{ textAlign: 'center', fontSize: '0.85rem', marginTop: '4px' }}>
-            <a 
-              href="#" 
-              onClick={(e) => { e.preventDefault(); setCurrentPath('/users'); }} 
-              className="table-link"
-              style={{ fontWeight: 600 }}
-            >
-              First-time setup / manage users
-            </a>
-          </p>
         </form>
-      </div>
-    );
-  }
 
-  if (!token && currentPath === '/users') {
-    return (
-      <div className="login-container">
-        {/* Backdrop Glow Blobs */}
-        <div className="bg-glow-1"></div>
-        <div className="bg-glow-2"></div>
-
-        <div style={{ width: '100%', maxWidth: '440px', zIndex: 10 }}>
-          <UsersView hasPerm={() => false} setPath={setCurrentPath} isSetupMode={true} />
+        <div className="mt-6 text-center border-t border-slate-100 dark:border-slate-800 pt-4">
+          <button onClick={() => nav('/users')} className="text-sm underline text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white transition">
+            First-time setup / manage users
+          </button>
         </div>
-      </div>
-    );
-  }
-
-  const navItems = [
-    { name: 'Dashboard', path: '/', icon: <TrendingUp size={18} />, perm: null },
-    { name: 'Companies', path: '/companies', icon: <Building2 size={18} />, perm: 'COMPANY' },
-    { name: 'Partners', path: '/agents', icon: <Users size={18} />, perm: 'AGENTS' },
-    { name: 'Installations', path: '/installations', icon: <Wrench size={18} />, perm: 'INSTALL' },
-    { name: 'Devices', path: '/devices', icon: <Smartphone size={18} />, perm: 'INVENTORY' },
-    { name: 'Users', path: '/users', icon: <ShieldAlert size={18} />, perm: 'USERS' },
-    { name: 'Reports', path: '/reports', icon: <TrendingUp size={18} />, perm: 'REPORTS' }
-  ];
-
-  // Dashboard Layout & Header wrapper
-  return (
-    <>
-      {/* Background Decorative Glows */}
-      <div className="bg-glow-1"></div>
-      <div className="bg-glow-2"></div>
-
-      {/* Mobile Sidebar Overlay */}
-      {sidebarOpen && (
-        <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>
-      )}
-
-      <div className="app-layout">
-        {/* Responsive Left Sidebar */}
-        <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
-          <div className="sidebar-header">
-            <div className="sidebar-brand-icon">
-              <Smartphone size={20} />
-            </div>
-            <span className="sidebar-brand-name">Arshi GPS Hub</span>
-          </div>
-
-          <div className="sidebar-menu">
-            {navItems.map((item, idx) => {
-              if (item.perm && !hasPerm(item.perm)) return null;
-              const isActive = currentPath === item.path;
-              return (
-                <div 
-                  key={idx} 
-                  className={`sidebar-item ${isActive ? 'active' : ''}`}
-                  onClick={() => {
-                    setCurrentPath(item.path);
-                    setCompanyDetailId(null);
-                    setAgentDetailId(null);
-                    setSidebarOpen(false);
-                  }}
-                >
-                  {item.icon}
-                  <span>{item.name}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="sidebar-footer">
-            <button onClick={handleLogout} className="btn btn-secondary" style={{ width: '100%', gap: '8px' }}>
-              <LogOut size={16} /> Logout
-            </button>
-          </div>
-        </aside>
-
-        {/* Main Wrapper */}
-        <div className="app-main-wrapper">
-          <header className="header">
-            <div className="header-content">
-              <button className="mobile-nav-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
-                {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
-              </button>
-
-              <div className="header-user-info">
-                <p className="user-name">Signed in as <span>{user?.name}</span></p>
-                <p className="user-role">{user?.role}</p>
-              </div>
-
-              <div className="header-actions">
-                <button 
-                  onClick={() => setDarkMode(!darkMode)} 
-                  className="btn btn-secondary" 
-                  style={{ width: '40px', height: '40px', padding: 0 }}
-                  title="Toggle Theme"
-                >
-                  {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <main className="main-content animate-fade-up">
-            {currentPath === '/' && (
-              <DashboardView 
-                user={user} 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-                setCompanyDetailId={setCompanyDetailId}
-                setAgentDetailId={setAgentDetailId}
-              />
-            )}
-            {currentPath === '/companies' && !companyDetailId && (
-              <CompaniesView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-                setCompanyDetailId={setCompanyDetailId}
-              />
-            )}
-            {currentPath === '/companies' && companyDetailId && (
-              <CompanyDetailView 
-                companyId={companyDetailId} 
-                setCompanyDetailId={setCompanyDetailId} 
-              />
-            )}
-            {currentPath === '/agents' && !agentDetailId && (
-              <AgentsView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-                setAgentDetailId={setAgentDetailId}
-              />
-            )}
-            {currentPath === '/agents' && agentDetailId && (
-              <AgentDetailView 
-                agentId={agentDetailId} 
-                setAgentDetailId={setAgentDetailId} 
-              />
-            )}
-            {currentPath === '/devices' && (
-              <DevicesView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-              />
-            )}
-            {currentPath === '/installations' && (
-              <InstallationsView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-              />
-            )}
-            {currentPath === '/users' && (
-              <UsersView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-              />
-            )}
-            {currentPath === '/reports' && (
-              <ReportsView 
-                hasPerm={hasPerm} 
-                setPath={setCurrentPath} 
-              />
-            )}
-          </main>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ==========================================
-// 1. DASHBOARD VIEW
-// ==========================================
-function DashboardView({ user, hasPerm, setPath, setCompanyDetailId, setAgentDetailId }) {
-  // Clear any detail view IDs when going back to dashboard
-  useEffect(() => {
-    setCompanyDetailId(null);
-    setAgentDetailId(null);
-  }, []);
-
-  const links = [
-    {
-      title: 'Company Dashboard',
-      desc: 'Add companies, record purchase devices, company payments, and view balances.',
-      badge: 'Company',
-      path: '/companies',
-      perm: 'COMPANY',
-      icon: <Building2 size={24} />
-    },
-    {
-      title: 'Partner Ledger',
-      desc: 'Track partners, sales, commissions, and performance summaries.',
-      badge: 'Partners',
-      path: '/agents',
-      perm: 'AGENTS',
-      icon: <Users size={24} />
-    },
-    {
-      title: 'Installations',
-      desc: 'Search and review customer installations with device and partner context.',
-      badge: 'Install',
-      path: '/installations',
-      perm: 'INSTALL',
-      icon: <Wrench size={24} />
-    },
-    {
-      title: 'Device Inventory',
-      desc: 'Manage stock, inventory movements, and device purchase details.',
-      badge: 'Inventory',
-      path: '/devices',
-      perm: 'INVENTORY',
-      icon: <Smartphone size={24} />
-    },
-    {
-      title: 'User Management',
-      desc: 'Create users, assign permission sets, and disable blocked accounts.',
-      badge: 'Security',
-      path: '/users',
-      perm: 'USERS',
-      icon: <ShieldAlert size={24} />
-    },
-    {
-      title: 'Reports',
-      desc: 'View summary reports for sales, purchases, profit, and pending balances.',
-      badge: 'Reports',
-      path: '/reports',
-      perm: 'REPORTS',
-      icon: <TrendingUp size={24} />
-    }
-  ];
-
-  return (
-    <div className="card-section" style={{ border: 'none', background: 'transparent', boxShadow: 'none', padding: 0 }}>
-      <div className="page-header" style={{ marginBottom: '40px' }}>
-        <div className="page-title-group">
-          <p className="page-category">Management Hub</p>
-          <h1 className="page-title">Quick Links</h1>
-          <p className="card-subtitle">Open workflows for company activity, partner operations, device inventory, installations, user management, and reports.</p>
-        </div>
-      </div>
-
-      <div className="grid-container">
-        {links.map((link, idx) => {
-          if (!hasPerm(link.perm)) return null;
-          return (
-            <div key={idx} className="link-card" onClick={() => setPath(link.path)}>
-              <div className="link-card-header">
-                <div style={{ color: 'var(--text-muted)' }}>
-                  {link.icon}
-                </div>
-                <span className="badge">{link.badge}</span>
-              </div>
-              <div>
-                <h3 className="link-card-title" style={{ marginTop: '20px' }}>{link.title}</h3>
-                <p className="link-card-desc">{link.desc}</p>
-              </div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );
 }
 
-// ==========================================
-// 2. COMPANIES VIEW
-// ==========================================
-function CompaniesView({ hasPerm, setPath, setCompanyDetailId, user }) {
-  const [companies, setCompanies] = useState([]);
-  const [summaries, setSummaries] = useState([]);
-  const [deviceTypes, setDeviceTypes] = useState([]);
+// ─────────────────────────────────────────────────────────────
+// DASHBOARD PAGE
+// ─────────────────────────────────────────────────────────────
+
+function DashboardPage({ user, nav, hasPerm, isDark, toggleTheme }) {
+  const quickLinks = [
+    { href: '/companies', title: 'Company Dashboard', badge: 'Company', desc: 'Add companies, record purchase devices, company payments, and view balances.', perm: 'COMPANY' },
+    { href: '/agents', title: 'Partner Ledger', badge: 'Partners', desc: 'Track partners, sales, commissions, and performance summaries.', perm: 'AGENTS' },
+    { href: '/installations', title: 'Installations', badge: 'Install', desc: 'Search and review customer installations with device and agent context.', perm: 'INSTALL' },
+    { href: '/devices', title: 'Device Inventory', badge: 'Inventory', desc: 'Manage stock, inventory movements, and device purchase details.', perm: 'INVENTORY' },
+    { href: '/users', title: 'User Management', badge: 'Security', desc: 'Create users, assign permission sets, and disable blocked accounts.', perm: 'USERS' },
+    { href: '/reports', title: 'Reports', badge: 'Reports', desc: 'View summary reports for sales, purchases, profit, and pending balances.', perm: 'REPORTS' },
+  ];
+
+  const allowed = quickLinks.filter(l => hasPerm(l.perm));
+
+  return (
+    <main className="min-h-[calc(100vh-80px)] bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-400 dark:text-slate-500">Operational dashboard</p>
+            <h1 className="text-4xl font-semibold mt-1">Welcome back, {user?.name || 'sunil'}</h1>
+          </div>
+          <button 
+            onClick={toggleTheme}
+            className="rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800 transition"
+          >
+            {isDark ? 'Switch to Day Mode' : 'Switch to Night Mode'}
+          </button>
+        </div>
+
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm shadow-slate-200/40 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-none transition">
+          <div className="space-y-1">
+            <h2 className="text-xl font-semibold text-slate-950 dark:text-white">Quick Links</h2>
+            <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">
+              Open workflows for company activity, agent operations, device inventory, installations, user management, and reports.
+            </p>
+          </div>
+          
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 mt-4">
+            {allowed.map((l) => (
+              <button
+                key={l.href}
+                onClick={() => nav(l.href)}
+                className="group block rounded-3xl border border-slate-200 bg-slate-50 p-6 text-left text-slate-950 transition hover:border-slate-400 hover:bg-white dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600 dark:hover:bg-slate-950/80"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold group-hover:text-slate-950 dark:group-hover:text-white">{l.title}</h3>
+                  <span className="rounded-full bg-slate-950 px-3 py-1 text-xs font-semibold text-white dark:bg-slate-100 dark:text-slate-950">{l.badge}</span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-400">{l.desc}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// COMPANIES PAGE
+// ─────────────────────────────────────────────────────────────
+
+function CompaniesPage({ hasPerm, nav, onDetail, showToast, maskData, toggleMask, fmt, fmtDate }) {
+  const [data, setData] = useState(null);
   const [batches, setBatches] = useState([]);
-  const [actorUsers, setActorUsers] = useState([]);
+  const [deletedDevices, setDeletedDevices] = useState([]);
+  
+  const [search, setSearch] = useState('');
+  const [deletedSearch, setDeletedSearch] = useState('');
+  const [filterDueOnly, setFilterDueOnly] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // View States
-  const [activeFormTab, setActiveFormTab] = useState('purchase'); // 'purchase' | 'company' | 'type' | 'payment'
-  const [showBulkUpload, setShowBulkUpload] = useState(false);
-  const [showSensitive, setShowSensitive] = useState(localStorage.getItem('showSensitive') === 'true');
-
-  // Filters State
-  const [search, setSearch] = useState('');
-  const [dueOnly, setDueOnly] = useState(false);
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  // Tabs for action cards
+  const [activeTab, setActiveTab] = useState('purchase'); // 'purchase' | 'company' | 'type' | 'payment'
 
   // Form States
-  const [companyName, setCompanyName] = useState('');
-  const [companyPhone, setCompanyPhone] = useState('');
-  const [companyAddress, setCompanyAddress] = useState('');
-  const [companyBasePrice, setCompanyBasePrice] = useState('0');
+  const [cName, setCName] = useState('');
+  const [cPhone, setCPhone] = useState('');
+  const [cAddr, setCAddr] = useState('');
+  const [cBasePrice, setCBasePrice] = useState('');
 
-  const [purchaseCompId, setPurchaseCompId] = useState('');
-  const [purchaseDevId, setPurchaseDevId] = useState('');
-  const [purchaseSerial, setPurchaseSerial] = useState('');
-  const [purchasePrice, setPurchasePrice] = useState('0');
-  const [purchaseType, setPurchaseType] = useState('');
-  const [purchasedAt, setPurchasedAt] = useState(new Date().toISOString().split('T')[0]);
-  const [purchaseImageFile, setPurchaseImageFile] = useState(null);
+  const [pCompany, setPCompany] = useState('');
+  const [pDevice, setPDevice] = useState('');
+  const [pSerial, setPSerial] = useState('');
+  const [pPrice, setPPrice] = useState('');
+  const [pDate, setPDate] = useState(today());
+  const [pImage, setPImage] = useState(null);
+  
+  const [pyCompany, setPyCompany] = useState('');
+  const [pyAmount, setPyAmount] = useState('');
+  const [pyDate, setPyDate] = useState(today());
+  const [pyImage, setPyImage] = useState(null);
 
-  // Bulk Purchase CSV
-  const [bulkCompId, setBulkCompId] = useState('');
-  const [bulkCSVText, setBulkCSVText] = useState('');
+  const [tCompany, setTCompany] = useState('');
+  const [tName, setTName] = useState('');
+  const [tBasePrice, setTBasePrice] = useState('');
 
-  // Device Type State
-  const [typeCompId, setTypeCompId] = useState('');
-  const [typeName, setTypeName] = useState('');
-  const [typeBasePrice, setTypeBasePrice] = useState('0');
+  // Bulk Purchase CSV state
+  const [bulkCsvFile, setBulkCsvFile] = useState(null);
 
-  const [payCompId, setPayCompId] = useState('');
-  const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
-  const [payReceiptFile, setPayReceiptFile] = useState(null);
-
-  const [alert, setAlert] = useState({ show: false, msg: '', type: '' });
-
-  const loadData = async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/companies`, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setCompanies(data.companies || []);
-        setSummaries(data.summaries || []);
-        setDeviceTypes(data.deviceTypes || []);
+      if (res.ok) setData(await res.json());
+
+      const br = await fetch(`${API_URL}/companies/purchase/batches`, { headers: getHeaders() });
+      if (br.ok) {
+        const bd = await br.json();
+        setBatches(bd.batches || []);
       }
 
-      // Fetch batches
-      const batchRes = await fetch(`${API_URL}/companies/purchase/batches`, { headers: getHeaders() });
-      if (batchRes.ok) {
-        const batchData = await batchRes.json();
-        setBatches(batchData.batches || []);
+      const dr = await fetch(`${API_URL}/devices/deleted`, { headers: getHeaders() });
+      if (dr.ok) {
+        const dd = await dr.json();
+        setDeletedDevices(dd.deletedDeviceRecords || []);
       }
-
-      // Fetch users for uploader mapping
-      const usersRes = await fetch(`${API_URL}/users`, { headers: getHeaders() });
-      if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        setActorUsers(usersData.users || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+    } catch {}
+    setLoading(false);
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { load(); }, []);
 
-  const triggerAlert = (msg, type = 'success') => {
-    setAlert({ show: true, msg, type });
-    setTimeout(() => setAlert({ show: false, msg: '', type: '' }), 5000);
-  };
+  const companies = data?.companies || [];
+  const summaries = data?.summaries || [];
 
-  const getCompanyName = (id) => {
-    const c = companies.find(comp => comp.id === id);
-    return c ? c.name : 'Unknown';
-  };
+  // Filter company balance sheet
+  const filteredSummaries = summaries.filter(s => {
+    const matchSearch = s.company.name.toLowerCase().includes(search.toLowerCase()) ||
+      s.company.phone.includes(search) ||
+      s.company.id.toLowerCase().includes(search.toLowerCase());
+    const matchDue = !filterDueOnly || s.totalDue > 0;
+    return matchSearch && matchDue;
+  });
 
-  const getUserName = (id) => {
-    const u = actorUsers.find(usr => usr.id === id);
-    return u ? u.name : 'System';
-  };
+  const totalDevices = filteredSummaries.reduce((sum, s) => sum + s.devicesCount, 0);
+  const totalPurchase = filteredSummaries.reduce((sum, s) => sum + s.totalPurchaseValue, 0);
+  const totalPaid = filteredSummaries.reduce((sum, s) => sum + s.totalPaid, 0);
+  const totalDue = filteredSummaries.reduce((sum, s) => sum + s.totalDue, 0);
 
-  const handleCreateCompany = async (e) => {
+  // Submit company
+  const submitCompany = async (e) => {
     e.preventDefault();
-    try {
-      const res = await fetch(`${API_URL}/companies`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ 
-          name: companyName, 
-          phone: companyPhone, 
-          address: companyAddress,
-          basePrice: Number(companyBasePrice) || 0 
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Company supplier registered successfully!');
-        setCompanyName('');
-        setCompanyPhone('');
-        setCompanyAddress('');
-        setCompanyBasePrice('0');
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to add company', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    const res = await fetch(`${API_URL}/companies`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ name: cName, phone: cPhone, address: cAddr, basePrice: Number(cBasePrice) }),
+    });
+    if (res.ok) { 
+      showToast('Company created successfully'); 
+      setCName(''); setCPhone(''); setCAddr(''); setCBasePrice('');
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error adding company', 'danger'); 
     }
   };
 
-  const handleAddPurchase = async (e) => {
+  // Submit device purchase
+  const submitPurchase = async (e) => {
     e.preventDefault();
-    let base64Image = '';
-    if (purchaseImageFile) {
-      base64Image = await fileToBase64(purchaseImageFile);
-    }
-    try {
-      const res = await fetch(`${API_URL}/companies/purchase`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          companyId: purchaseCompId,
-          deviceId: purchaseDevId,
-          serialNumber: purchaseSerial,
-          purchasePrice: Number(purchasePrice),
-          deviceTypeId: purchaseType || undefined,
-          purchasedAt: purchasedAt || undefined,
-          image: base64Image
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Device purchase recorded in inventory!');
-        setPurchaseCompId('');
-        setPurchaseDevId('');
-        setPurchaseSerial('');
-        setPurchasePrice('0');
-        setPurchaseType('');
-        setPurchasedAt(new Date().toISOString().split('T')[0]);
-        setPurchaseImageFile(null);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to record purchase', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    let image = '';
+    if (pImage) image = await fileToB64(pImage);
+    const res = await fetch(`${API_URL}/companies/purchase`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ 
+        companyId: pCompany, 
+        deviceId: pDevice, 
+        serialNumber: pSerial, 
+        purchasePrice: Number(pPrice), 
+        purchasedAt: pDate, 
+        image 
+      }),
+    });
+    if (res.ok) { 
+      showToast('Device purchase recorded'); 
+      setPCompany(''); setPDevice(''); setPSerial(''); setPPrice(''); setPDate(today()); setPImage(null); 
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error adding purchase', 'danger'); 
     }
   };
 
-  const handleBulkPurchaseUpload = async (e) => {
+  // Bulk Purchase CSV
+  const submitBulkPurchase = async (e) => {
     e.preventDefault();
-    if (!bulkCompId || !bulkCSVText) {
-      triggerAlert('Please select a supplier and enter CSV content', 'danger');
+    if (!bulkCsvFile || !pCompany) {
+      showToast('Please select a company and upload a CSV file', 'danger');
       return;
     }
-    try {
-      const res = await fetch(`${API_URL}/companies/purchase/bulk`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          companyId: bulkCompId,
-          csvText: bulkCSVText
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert(`Bulk import successful: ${data.count} devices added!`);
-        setBulkCompId('');
-        setBulkCSVText('');
-        setShowBulkUpload(false);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to import CSV', 'danger');
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const csvText = event.target.result;
+      try {
+        const res = await fetch(`${API_URL}/companies/purchase/bulk`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({ companyId: pCompany, csvText })
+        });
+        const d = await res.json();
+        if (res.ok) {
+          showToast(`Successfully imported ${d.count} devices!`);
+          setBulkCsvFile(null);
+          load();
+        } else {
+          showToast(d.error || 'Failed bulk upload', 'danger');
+        }
+      } catch {
+        showToast('Server network error during upload', 'danger');
       }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
+    };
+    reader.readAsText(bulkCsvFile);
   };
 
-  const handleAddDeviceType = async (e) => {
-    e.preventDefault();
-    try {
-      const res = await fetch(`${API_URL}/companies/types`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          companyId: typeCompId,
-          name: typeName,
-          basePrice: Number(typeBasePrice) || 0
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Device type created successfully!');
-        setTypeCompId('');
-        setTypeName('');
-        setTypeBasePrice('0');
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to create device type', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  const handleAddPayment = async (e) => {
-    e.preventDefault();
-    let base64Receipt = '';
-    if (payReceiptFile) {
-      base64Receipt = await fileToBase64(payReceiptFile);
-    }
-    try {
-      const res = await fetch(`${API_URL}/companies/payment`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          companyId: payCompId,
-          amount: Number(payAmount),
-          receiptImage: base64Receipt,
-          paymentDate: payDate || undefined
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Company payment recorded!');
-        setPayCompId('');
-        setPayAmount('');
-        setPayDate(new Date().toISOString().split('T')[0]);
-        setPayReceiptFile(null);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to record payment', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
+  // Revert Purchase Batch
   const handleRevertBatch = async (batchId) => {
-    if (!window.confirm('Are you sure you want to revert this import batch? All unsold devices in this batch will be permanently removed from inventory.')) return;
+    if (!window.confirm('Are you sure you want to revert this import? All active devices in this batch will be permanently removed.')) return;
     try {
       const res = await fetch(`${API_URL}/companies/purchase/revert/${batchId}`, {
         method: 'POST',
         headers: getHeaders()
       });
-      const data = await res.json();
+      const d = await res.json();
       if (res.ok) {
-        triggerAlert('Import batch reverted successfully!');
-        loadData();
+        showToast('Import batch successfully reverted!');
+        load();
       } else {
-        triggerAlert(data.error || 'Failed to revert batch', 'danger');
+        showToast(d.error || 'Failed to revert batch', 'danger');
       }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    } catch {
+      showToast('Server network error', 'danger');
     }
   };
 
-  const handleToggleSensitive = () => {
-    const val = !showSensitive;
-    setShowSensitive(val);
-    localStorage.setItem('showSensitive', val);
+  // Submit payment
+  const submitPayment = async (e) => {
+    e.preventDefault();
+    let receiptImage = '';
+    if (pyImage) receiptImage = await fileToB64(pyImage);
+    const res = await fetch(`${API_URL}/companies/payment`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ companyId: pyCompany, amount: Number(pyAmount), paymentDate: pyDate, receiptImage }),
+    });
+    if (res.ok) { 
+      showToast('Payment recorded'); 
+      setPyCompany(''); setPyAmount(''); setPyDate(today()); setPyImage(null); 
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error recording payment', 'danger'); 
+    }
   };
 
-  // Filter balance sheet
-  const filteredSummaries = summaries.filter(s => {
-    const nameMatch = s.company.name.toLowerCase().includes(search.toLowerCase());
-    const dueMatch = !dueOnly || s.totalDue > 0;
-    return nameMatch && dueMatch;
-  });
+  // Submit device type
+  const submitDeviceType = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${API_URL}/companies/types`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ companyId: tCompany, name: tName, basePrice: Number(tBasePrice) }),
+    });
+    if (res.ok) {
+      showToast('Device type added successfully');
+      setTCompany(''); setTName(''); setTBasePrice('');
+      load();
+    } else {
+      const d = await res.json();
+      showToast(d.error || 'Error adding device type', 'danger');
+    }
+  };
 
-  const handleExportBalanceSheet = () => {
-    const headers = ['Supplier Name', 'Contact', 'Devices Count', 'Purchase Value', 'Total Paid', 'Outstanding Due'];
+  const handleRestoreDeleted = async (id) => {
+    if (!window.confirm('Restore this device back into stock?')) return;
+    try {
+      const res = await fetch(`${API_URL}/devices/deleted/restore/${id}`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+      if (res.ok) {
+        showToast('Device restored successfully!');
+        load();
+      } else {
+        const d = await res.json();
+        showToast(d.error || 'Failed to restore', 'danger');
+      }
+    } catch {
+      showToast('Restore request failed', 'danger');
+    }
+  };
+
+  // Export balance sheet CSV
+  const handleExportSheet = () => {
+    const headers = ['Company', 'Phone', 'Address', 'Devices Purchased', 'Total Purchase', 'Total Paid', 'Remaining Due'];
     const rows = filteredSummaries.map(s => [
       s.company.name,
-      s.company.phone + ' - ' + s.company.address,
+      s.company.phone,
+      s.company.address,
       s.devicesCount,
-      s.totalPurchaseValue,
+      maskData ? '••••' : s.totalPurchaseValue,
       s.totalPaid,
       s.totalDue
     ]);
-    exportToExcel(headers, rows, 'Company_Balances.csv');
+    exportToCSV(headers, rows, `company_balances_${today()}.csv`);
   };
 
-  // Find types for currently selected purchase company
-  const currentCompTypes = deviceTypes.filter(t => t.companyId === purchaseCompId);
+  if (loading) return <Loader />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {/* Page Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Company Ledger</p>
-          <h1 className="page-title">Companies</h1>
-          <p className="card-subtitle">Manage suppliers, record device purchases and payments, and review balances per company.</p>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Dashboard
-        </button>
-      </div>
-
-      {alert.show && (
-        <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-          {alert.msg}
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <div className="stats-grid" style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <div className="stat-card">
-          <span className="stat-label">COMPANIES</span>
-          <span className="stat-value">{companies.length}</span>
-          <span className="stat-desc">Active suppliers</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">DEVICES PURCHASED</span>
-          <span className="stat-value">
-            {summaries.reduce((sum, s) => sum + s.devicesCount, 0)}
-          </span>
-          <span className="stat-desc">Across all companies</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">TOTAL PURCHASE VALUE</span>
-          <span className="stat-value">
-            {showSensitive ? formatCurrency(summaries.reduce((sum, s) => sum + s.totalPurchaseValue, 0)) : '••••'}
-          </span>
-          <span className="stat-desc">Inventory cost</span>
-        </div>
-      </div>
-
-      {/* Tabs Actions UI Panel */}
-      <section className="card-section">
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-          <h2 className="card-title">Actions</h2>
-          <p className="card-subtitle">Purchase devices, create companies and types, or record payments — use tabs to switch.</p>
-        </div>
-
-        <div style={{ marginTop: '20px' }}>
-          {/* Tabs header */}
-          <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-            <button 
-              type="button"
-              className={`btn ${activeFormTab === 'purchase' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('purchase'); }}
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Page Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Company ledger</p>
+            <h1 className="text-4xl font-semibold">Companies</h1>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Manage suppliers, record device purchases and payments, and review balances.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleMask}
+              className="rounded-full border border-slate-300 bg-white p-3 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition"
+              title="Toggle Mask Private Financial Data"
             >
-              Purchase device
+              {maskData ? '👁️ Show Prices' : '🔒 Hide Prices'}
+            </button>
+            <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Dashboard
+            </button>
+          </div>
+        </div>
+
+        {/* Summary metrics section */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Registered Suppliers</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{companies.length}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Devices Purchased</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{totalDevices}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Paid To Suppliers</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{maskData ? '₹••••' : fmt(totalPaid)}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Outstanding Due</p>
+            <p className="text-3xl font-semibold text-red-600 dark:text-red-400 mt-2">{fmt(totalDue)}</p>
+          </div>
+        </div>
+
+        {/* Action Panel Tab Selector */}
+        <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+            <button 
+              onClick={() => setActiveTab('purchase')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'purchase' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
+            >
+              Purchase Device
             </button>
             <button 
-              type="button"
-              className={`btn ${activeFormTab === 'company' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('company'); }}
+              onClick={() => setActiveTab('company')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'company' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
             >
-              New company
+              New Company
             </button>
             <button 
-              type="button"
-              className={`btn ${activeFormTab === 'type' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('type'); }}
+              onClick={() => setActiveTab('type')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'type' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
             >
-              Device type
+              Device Type
             </button>
             <button 
-              type="button"
-              className={`btn ${activeFormTab === 'payment' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('payment'); }}
+              onClick={() => setActiveTab('payment')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'payment' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
             >
-              Payment
+              Record Payment
             </button>
           </div>
 
-          {/* Form Tabs panel content */}
-          {activeFormTab === 'purchase' && hasPerm('COMPANY_DEVICE_ADD') && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center', marginBottom: '16px' }}>
-                <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
-                  Add one device or upload many via CSV.
-                </p>
-                <button 
-                  type="button" 
-                  className="btn btn-secondary"
-                  style={{ padding: '6px 12px', fontSize: '0.85rem' }}
-                  onClick={() => setShowBulkUpload(!showBulkUpload)}
-                >
-                  {showBulkUpload ? 'Single purchase' : 'Bulk CSV upload'}
-                </button>
+          {/* Tab Content forms */}
+          {activeTab === 'purchase' && hasPerm('COMPANY_DEVICE_ADD') && (
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4 gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold">Purchase Device</h3>
+                  <p className="text-sm text-slate-500">Record a single purchased device or batch CSV import.</p>
+                </div>
               </div>
-
-              {showBulkUpload ? (
-                <form onSubmit={handleBulkPurchaseUpload} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-                  <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>Bulk CSV upload</h3>
-                  <div className="form-group">
-                    <label className="form-label">Company *</label>
-                    <select 
-                      required 
-                      className="form-select"
-                      value={bulkCompId}
-                      onChange={e => setBulkCompId(e.target.value)}
-                    >
+              <div className="grid gap-8 md:grid-cols-2">
+                {/* Single Form */}
+                <form onSubmit={submitPurchase} className="space-y-4">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Single Device</h4>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Supplier Company *</label>
+                    <select required value={pCompany} onChange={e => setPCompany(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
                       <option value="">Select company</option>
                       {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">CSV Text *</label>
-                    <textarea 
-                      required
-                      placeholder="deviceId,serialNumber,purchasePrice,purchasedAt&#10;358250331000000,ITR12345,6000,2026-06-12"
-                      className="form-input"
-                      style={{ minHeight: '120px', fontFamily: 'monospace', fontSize: '0.85rem' }}
-                      value={bulkCSVText}
-                      onChange={e => setBulkCSVText(e.target.value)}
-                    />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Device ID (IMEI) *</label>
+                      <input required placeholder="15 digit IMEI" value={pDevice} onChange={e => setPDevice(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Serial Number *</label>
+                      <input required placeholder="Serial No." value={pSerial} onChange={e => setPSerial(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    </div>
                   </div>
-                  <button type="submit" className="btn btn-primary">Import CSV Devices</button>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Purchase Price *</label>
+                      <input required type="number" placeholder="Use 0 for base price" value={pPrice} onChange={e => setPPrice(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Purchase Date *</label>
+                      <input type="date" value={pDate} onChange={e => setPDate(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Device Photo (Optional)</label>
+                    <input type="file" accept="image/*" onChange={e => setPImage(e.target.files[0])}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400" />
+                  </div>
+                  <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                    Add Purchase
+                  </button>
                 </form>
-              ) : (
-                <form onSubmit={handleAddPurchase} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-                  <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>Device purchase</h3>
-                  
-                  <div className="form-group">
-                    <label className="form-label">Company *</label>
-                    <select 
-                      required 
-                      className="form-select"
-                      value={purchaseCompId}
-                      onChange={e => { setPurchaseCompId(e.target.value); setPurchaseType(''); }}
-                    >
+
+                {/* Bulk Form */}
+                <form onSubmit={submitBulkPurchase} className="space-y-4 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 md:pl-8 pt-6 md:pt-0">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Bulk CSV Import</h4>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Select Supplier *</label>
+                    <select required value={pCompany} onChange={e => setPCompany(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
                       <option value="">Select company</option>
                       {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                   </div>
-
-                  <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                    <div className="form-group">
-                      <label className="form-label">IMEI *</label>
-                      <input 
-                        required 
-                        className="form-input"
-                        value={purchaseDevId}
-                        onChange={e => setPurchaseDevId(e.target.value)}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Serial number *</label>
-                      <input 
-                        required 
-                        className="form-input"
-                        value={purchaseSerial}
-                        onChange={e => setPurchaseSerial(e.target.value)}
-                      />
-                    </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Upload CSV File *</label>
+                    <input type="file" required accept=".csv" onChange={e => setBulkCsvFile(e.target.files[0])}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400" />
                   </div>
-
-                  <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                    <div className="form-group">
-                      <label className="form-label">Device Type (optional)</label>
-                      <select 
-                        className="form-select"
-                        value={purchaseType}
-                        onChange={e => setPurchaseType(e.target.value)}
-                      >
-                        <option value="">No type</option>
-                        {currentCompTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
-                    </div>
-                    <div className="form-group">
-                      <label className="form-label">Purchase price *</label>
-                      <input 
-                        type="number"
-                        required 
-                        className="form-input"
-                        value={purchasePrice}
-                        onChange={e => setPurchasePrice(e.target.value)}
-                      />
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Use 0 for company or type base price</span>
-                    </div>
+                  <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-2xl text-xs text-slate-500 space-y-1">
+                    <p className="font-semibold text-slate-700 dark:text-slate-300">Required CSV Columns:</p>
+                    <p>• imei / deviceid / device id (15 digits)</p>
+                    <p>• serial / serialnumber</p>
+                    <p>Optional: price, date, type</p>
                   </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Purchase date</label>
-                    <input 
-                      type="date"
-                      className="form-input"
-                      value={purchasedAt}
-                      onChange={e => setPurchasedAt(e.target.value)}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Photo (optional)</label>
-                    <div className="file-upload-wrapper">
-                      <button type="button" className="file-upload-btn">
-                        <Upload size={16} /> {purchaseImageFile ? purchaseImageFile.name : 'Upload device image'}
-                      </button>
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="file-upload-input"
-                        onChange={e => setPurchaseImageFile(e.target.files[0])}
-                      />
-                    </div>
-                  </div>
-
-                  <button type="submit" className="btn btn-primary">Add purchase</button>
+                  <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                    Upload CSV
+                  </button>
                 </form>
-              )}
+              </div>
             </div>
           )}
 
-          {activeFormTab === 'company' && hasPerm('COMPANY_CREATE') && (
-            <form onSubmit={handleCreateCompany} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-              <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>New company supplier</h3>
-              <div className="form-group">
-                <label className="form-label">Company name *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={companyName}
-                  onChange={e => setCompanyName(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Phone *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={companyPhone}
-                  onChange={e => setCompanyPhone(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Address *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={companyAddress}
-                  onChange={e => setCompanyAddress(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Base purchase price</label>
-                <input 
-                  type="number"
-                  className="form-input"
-                  value={companyBasePrice}
-                  onChange={e => setCompanyBasePrice(e.target.value)}
-                />
-              </div>
-              <button type="submit" className="btn btn-primary">Add company</button>
-            </form>
-          )}
-
-          {activeFormTab === 'type' && hasPerm('COMPANY_CREATE') && (
-            <form onSubmit={handleAddDeviceType} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-              <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>Device type</h3>
-              <div className="form-group">
-                <label className="form-label">Company supplier *</label>
-                <select 
-                  required 
-                  className="form-select"
-                  value={typeCompId}
-                  onChange={e => setTypeCompId(e.target.value)}
-                >
-                  <option value="">Select company</option>
-                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Type name *</label>
-                <input 
-                  required 
-                  placeholder="e.g. AIS140, Basic Tracker"
-                  className="form-input"
-                  value={typeName}
-                  onChange={e => setTypeName(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Base selling price</label>
-                <input 
-                  type="number"
-                  className="form-input"
-                  value={typeBasePrice}
-                  onChange={e => setTypeBasePrice(e.target.value)}
-                />
-              </div>
-              <button type="submit" className="btn btn-primary">Create Device Type</button>
-            </form>
-          )}
-
-          {activeFormTab === 'payment' && hasPerm('COMPANY_PAYMENT') && (
-            <form onSubmit={handleAddPayment} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-              <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>Company payment</h3>
-              <div className="form-group">
-                <label className="form-label">Company supplier *</label>
-                <select 
-                  required 
-                  className="form-select"
-                  value={payCompId}
-                  onChange={e => setPayCompId(e.target.value)}
-                >
-                  <option value="">Select company</option>
-                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Payment amount *</label>
-                <input 
-                  type="number"
-                  required 
-                  className="form-input"
-                  value={payAmount}
-                  onChange={e => setPayAmount(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Payment date</label>
-                <input 
-                  type="date"
-                  className="form-input"
-                  value={payDate}
-                  onChange={e => setPayDate(e.target.value)}
-                />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Receipt Image</label>
-                <div className="file-upload-wrapper">
-                  <button type="button" className="file-upload-btn">
-                    <Upload size={16} /> {payReceiptFile ? payReceiptFile.name : 'Upload receipt image'}
-                  </button>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    className="file-upload-input"
-                    onChange={e => setPayReceiptFile(e.target.files[0])}
-                  />
+          {activeTab === 'company' && hasPerm('COMPANY_CREATE') && (
+            <form onSubmit={submitCompany} className="space-y-4 max-w-xl animate-fade-in">
+              <h3 className="text-lg font-semibold">New Company</h3>
+              <p className="text-sm text-slate-500">Contact details and default base pricing.</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Company Name *</label>
+                  <input required placeholder="e.g. ROSMERTA" value={cName} onChange={e => setCName(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Phone Number *</label>
+                  <input required placeholder="Mobile / Landline" value={cPhone} onChange={e => setCPhone(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
                 </div>
               </div>
-              <button type="submit" className="btn btn-primary">Record Payment</button>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Base Price *</label>
+                  <input required type="number" placeholder="Default purchase price" value={cBasePrice} onChange={e => setCBasePrice(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Address *</label>
+                  <input required placeholder="Office Address" value={cAddr} onChange={e => setCAddr(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+              </div>
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Create Company
+              </button>
+            </form>
+          )}
+
+          {activeTab === 'type' && hasPerm('COMPANY_CREATE') && (
+            <form onSubmit={submitDeviceType} className="space-y-4 max-w-xl animate-fade-in">
+              <h3 className="text-lg font-semibold">Device Type</h3>
+              <p className="text-sm text-slate-500">Configure type-specific purchase pricing per company.</p>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Company *</label>
+                <select required value={tCompany} onChange={e => setTCompany(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                  <option value="">Select company</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Type Name *</label>
+                  <input required placeholder="e.g. AIS140" value={tName} onChange={e => setTName(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Default Purchase Price *</label>
+                  <input required type="number" placeholder="Base Type Price" value={tBasePrice} onChange={e => setTBasePrice(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+              </div>
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Add Device Type
+              </button>
+            </form>
+          )}
+
+          {activeTab === 'payment' && hasPerm('COMPANY_PAYMENT') && (
+            <form onSubmit={submitPayment} className="space-y-4 max-w-xl animate-fade-in">
+              <h3 className="text-lg font-semibold">Company Payment</h3>
+              <p className="text-sm text-slate-500">Record a payment made to a supplier company.</p>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Supplier Company *</label>
+                <select required value={pyCompany} onChange={e => setPyCompany(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                  <option value="">Select company</option>
+                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Amount Paid (INR) *</label>
+                  <input required type="number" placeholder="Amount" value={pyAmount} onChange={e => setPyAmount(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Payment Date *</label>
+                  <input type="date" value={pyDate} onChange={e => setPyDate(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Receipt Screenshot *</label>
+                <input required type="file" accept="image/*" onChange={e => setPyImage(e.target.files[0])}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400" />
+              </div>
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Record Payment
+              </button>
             </form>
           )}
         </div>
-      </section>
 
-      {/* CSV Purchase Upload Batches History */}
-      {batches.length > 0 && (
-        <section className="card-section">
-          <div className="card-title-group">
-            <h2 className="card-title">Historic import history</h2>
-            <p className="card-subtitle">Each CSV upload is saved as a batch. Revert removes all devices and related records from that import.</p>
+        {/* Historic import batches */}
+        {batches.length > 0 && (
+          <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold">Historic Import History</h2>
+              <p className="text-sm text-slate-500">Each CSV upload batch is saved. Revert deletes all imported devices if still in stock.</p>
+            </div>
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Uploaded At</th>
+                    <th className="px-6 py-4">Supplier</th>
+                    <th className="px-6 py-4">Imported Count</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {batches.map(b => {
+                    const comp = companies.find(c => c.id === b.companyId);
+                    return (
+                      <tr key={b.id} className="hover:bg-slate-50 dark:hover:bg-slate-900 transition text-slate-700 dark:text-slate-300">
+                        <td className="px-6 py-4 font-mono text-xs">{fmtDate(b.createdAt)}</td>
+                        <td className="px-6 py-4 font-semibold">{comp?.name || 'Unknown'}</td>
+                        <td className="px-6 py-4">{b.imported} Devices</td>
+                        <td className="px-6 py-4">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            b.status === 'REVERTED' ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-400'
+                          }`}>
+                            {b.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          {b.status !== 'REVERTED' && (
+                            <button onClick={() => handleRevertBatch(b.id)} className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-100 dark:border-red-950 dark:bg-red-950/20 dark:text-red-400 dark:hover:bg-red-950/40 transition">
+                              Revert
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Deleted devices section */}
+        {deletedDevices.length > 0 && (
+          <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold">Deleted Device History</h2>
+              <p className="text-sm text-slate-500">Stock devices permanently deleted. Search and restore back into active inventory.</p>
+            </div>
+            <div className="flex gap-4">
+              <input 
+                placeholder="Search IMEI, serial, deleted by..."
+                value={deletedSearch}
+                onChange={e => setDeletedSearch(e.target.value)}
+                className="w-full max-w-sm rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              />
+            </div>
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">IMEI</th>
+                    <th className="px-6 py-4">Serial</th>
+                    <th className="px-6 py-4">Company</th>
+                    <th className="px-6 py-4">Deleted Date</th>
+                    <th className="px-6 py-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {deletedDevices
+                    .filter(d => 
+                      d.deviceId.toLowerCase().includes(deletedSearch.toLowerCase()) ||
+                      d.serialNumber.toLowerCase().includes(deletedSearch.toLowerCase())
+                    )
+                    .map(d => {
+                      const comp = companies.find(c => c.id === d.companyId);
+                      return (
+                        <tr key={d.id} className="hover:bg-slate-50 dark:hover:bg-slate-900 transition text-slate-700 dark:text-slate-300">
+                          <td className="px-6 py-4 font-mono text-xs">{d.deviceId}</td>
+                          <td className="px-6 py-4">{d.serialNumber}</td>
+                          <td className="px-6 py-4">{comp?.name || 'Unknown'}</td>
+                          <td className="px-6 py-4 text-xs text-slate-500">{fmtDate(d.deletedAt)}</td>
+                          <td className="px-6 py-4">
+                            <button onClick={() => handleRestoreDeleted(d.id)} className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition">
+                              Restore Stock
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Company Balance Sheet Table */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm shadow-slate-200/40 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-none transition">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold text-slate-950 dark:text-white">Company Balance Sheet</h2>
+              <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">Summarized balances calculated from device purchase history and payments.</p>
+            </div>
+            <button onClick={handleExportSheet} className="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Export Excel
+            </button>
           </div>
-          <div className="table-wrapper" style={{ marginTop: '20px' }}>
-            <table className="custom-table">
-              <thead>
+
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-3">
+                <input 
+                  type="checkbox"
+                  id="dueOnly"
+                  checked={filterDueOnly}
+                  onChange={e => setFilterDueOnly(e.target.checked)}
+                  className="w-4 h-4 rounded border-slate-300 text-slate-900 outline-none"
+                />
+                <label htmlFor="dueOnly" className="text-sm font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                  Due balances only
+                </label>
+              </div>
+              <input
+                placeholder="Search company..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:w-64"
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Company</th>
+                    <th className="px-6 py-4">Devices Purchased</th>
+                    <th className="px-6 py-4">Total Purchase</th>
+                    <th className="px-6 py-4">Total Paid</th>
+                    <th className="px-6 py-4">Remaining Due</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredSummaries.map(s => (
+                    <tr key={s.company.id} className="transition hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                      <td className="px-6 py-4 font-semibold text-slate-900 dark:text-white">
+                        <button
+                          onClick={() => onDetail(s.company.id)}
+                          className="text-left text-slate-950 hover:underline dark:text-white"
+                        >
+                          {s.company.name}
+                        </button>
+                        <div className="text-xs text-slate-400 font-normal mt-1">{s.company.phone} · {s.company.address}</div>
+                      </td>
+                      <td className="px-6 py-4 font-mono">{s.devicesCount}</td>
+                      <td className="px-6 py-4">{fmt(s.totalPurchaseValue)}</td>
+                      <td className="px-6 py-4">{fmt(s.totalPaid)}</td>
+                      <td className={`px-6 py-4 font-semibold ${s.totalDue > 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
+                        {fmt(s.totalDue)}
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredSummaries.length === 0 && (
+                    <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No records matching search.</td></tr>
+                  )}
+                  {/* Totals row */}
+                  {filteredSummaries.length > 0 && (
+                    <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-bold">
+                      <td className="px-6 py-4">Totals</td>
+                      <td className="px-6 py-4 font-mono">{totalDevices}</td>
+                      <td className="px-6 py-4">{fmt(totalPurchase)}</td>
+                      <td className="px-6 py-4">{fmt(totalPaid)}</td>
+                      <td className="px-6 py-4 text-red-600 dark:text-red-400">{fmt(totalDue)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// COMPANY DETAIL PAGE
+// ─────────────────────────────────────────────────────────────
+
+function CompanyDetailPage({ id, nav, hasPerm, showToast, maskData, toggleMask, fmt, fmtDate }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  
+  // Device Type forms
+  const [typeName, setTypeName] = useState('');
+  const [typePrice, setTypePrice] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/companies/${id}`, { headers: getHeaders() });
+      if (res.ok) setData(await res.json());
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [id]);
+
+  const addDeviceType = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${API_URL}/companies/types`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ companyId: id, name: typeName, basePrice: Number(typePrice) }),
+    });
+    if (res.ok) {
+      showToast('Device type added successfully');
+      setTypeName(''); setTypePrice('');
+      load();
+    } else {
+      const d = await res.json();
+      showToast(d.error || 'Error', 'danger');
+    }
+  };
+
+  if (loading) return <Loader />;
+  if (!data) return <div className="p-8 text-center text-slate-400">Company not found.</div>;
+
+  const { company, purchaseItems = [], payments = [], deviceTypes = [] } = data;
+
+  const filteredItems = purchaseItems.filter(p =>
+    p.deviceId?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Supplier Account Details</p>
+            <h1 className="text-4xl font-semibold mt-1">{company.name}</h1>
+            <p className="text-sm text-slate-500 mt-1">{company.phone} · {company.address}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleMask}
+              className="rounded-full border border-slate-300 bg-white p-3 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition"
+            >
+              {maskData ? '👁️' : '🔒'}
+            </button>
+            <button onClick={() => nav('/companies')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Back to Companies
+            </button>
+          </div>
+        </div>
+
+        {/* Dynamic sub panels */}
+        <div className="grid gap-6 md:grid-cols-3">
+          
+          {/* Add custom Device type for company */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <h3 className="text-lg font-semibold mb-1">Add Device Type</h3>
+            <p className="text-xs text-slate-500 mb-4">Set up a base hardware type and purchase cost.</p>
+            <form onSubmit={addDeviceType} className="space-y-4">
+              <input required placeholder="Device Type Name (e.g. AIS140)" value={typeName} onChange={e => setTypeName(e.target.value)}
+                className="w-full rounded-2xl border border-slate-300 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+              <input required type="number" placeholder="Base Purchase Price (INR)" value={typePrice} onChange={e => setTypePrice(e.target.value)}
+                className="w-full rounded-2xl border border-slate-300 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+              <button type="submit" className="w-full rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Create Type
+              </button>
+            </form>
+          </div>
+
+          {/* Current Device Types List */}
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 md:col-span-2">
+            <h3 className="text-lg font-semibold mb-4">Configured Device Types</h3>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {deviceTypes.map(t => (
+                <div key={t.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950 flex justify-between items-center">
+                  <span className="font-semibold text-sm">{t.name}</span>
+                  <span className="text-slate-500 text-xs font-mono">{fmt(t.basePrice)}</span>
+                </div>
+              ))}
+              {deviceTypes.length === 0 && (
+                <div className="sm:col-span-2 text-center py-6 text-xs text-slate-400">No device types added. Using company base price.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Purchases Table */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-xl font-semibold">Purchased Devices Registry</h2>
+            <input
+              placeholder="Search devices..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 sm:w-64"
+            />
+          </div>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
                 <tr>
-                  <th>Import Date</th>
-                  <th>Supplier</th>
-                  <th>Uploader</th>
-                  <th>Status</th>
-                  <th>Imported</th>
-                  <th>Action</th>
+                  <th className="px-6 py-4">Device IMEI (ID)</th>
+                  <th className="px-6 py-4">Purchase Price</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4">Date Purchased</th>
                 </tr>
               </thead>
-              <tbody>
-                {batches.map((b, idx) => (
-                  <tr key={idx}>
-                    <td>{new Date(b.uploadedAt).toLocaleString('en-IN')}</td>
-                    <td>{getCompanyName(b.companyId)}</td>
-                    <td>{getUserName(b.uploadedByUserId)}</td>
-                    <td>
-                      <span className={`badge ${b.status === 'ACTIVE' ? 'badge-active' : 'badge-disabled'}`}>
-                        {b.status}
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredItems.map(p => (
+                  <tr key={p.id || p.deviceId} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                    <td className="px-6 py-4 font-mono text-xs font-semibold">{p.deviceId}</td>
+                    <td className="px-6 py-4">{fmt(p.purchasePrice)}</td>
+                    <td className="px-6 py-4">
+                      {/* Check device status from lookup or standard badges */}
+                      <span className="rounded-full bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-400 px-3 py-1 text-xs font-semibold">
+                        IN STOCK
                       </span>
                     </td>
-                    <td>{b.imported} device(s)</td>
-                    <td>
-                      {b.status === 'ACTIVE' && (
-                        <button 
-                          onClick={() => handleRevertBatch(b.id)} 
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.8rem', color: 'var(--text-danger)' }}
-                        >
-                          Revert
-                        </button>
-                      )}
-                    </td>
+                    <td className="px-6 py-4 text-xs font-mono">{fmtDate(p.purchasedAt)}</td>
                   </tr>
                 ))}
+                {filteredItems.length === 0 && (
+                  <tr><td colSpan={4} className="px-6 py-8 text-center text-slate-400">No purchases found.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
         </section>
-      )}
 
-      {/* Company Balance Sheet */}
-      <section className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Company balance sheet</h2>
-          <p className="card-subtitle">Filter by search, show cost toggles, and view outstanding dues per supplier.</p>
-        </div>
-
-        {/* Filters */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '20px', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flexGrow: 1, minWidth: '200px' }}>
-            <label className="form-label">Search companies</label>
-            <input 
-              placeholder="Search supplier name or ID..."
-              className="form-input"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', height: '42px' }}>
-            <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', fontSize: '0.9rem' }}>
-              <input 
-                type="checkbox" 
-                checked={dueOnly}
-                onChange={e => setDueOnly(e.target.checked)}
-              />
-              Due only
-            </label>
-            <button 
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleToggleSensitive}
-            >
-              {showSensitive ? 'Hide Purchase & Costs' : 'Show purchase, cost & profit'}
-            </button>
-          </div>
-          <button onClick={handleExportBalanceSheet} className="btn btn-secondary">
-            Export Excel
-          </button>
-        </div>
-
-        {loading ? (
-          <p style={{ marginTop: '20px' }}>Loading balance sheet...</p>
-        ) : (
-          <div className="table-wrapper" style={{ marginTop: '24px' }}>
-            <table className="custom-table">
-              <thead>
+        {/* Payments Table */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <h2 className="text-xl font-semibold">Payment Outflows</h2>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
                 <tr>
-                  <th>Company</th>
-                  <th>Contact</th>
-                  <th>Devices</th>
-                  <th>Purchase</th>
-                  <th>Paid</th>
-                  <th>Due</th>
+                  <th className="px-6 py-4">Amount Paid</th>
+                  <th className="px-6 py-4">Date Recorded</th>
+                  <th className="px-6 py-4">Receipt</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredSummaries.length === 0 ? (
-                  <tr>
-                    <td colSpan="6" style={{ textAlign: 'center' }}>No supplier records matching filters</td>
-                  </tr>
-                ) : (
-                  filteredSummaries.map((sum, index) => (
-                    <tr key={index}>
-                      <td>
-                        <a 
-                          href="#" 
-                          style={{ fontWeight: 600, textDecoration: 'underline' }}
-                          onClick={(e) => { e.preventDefault(); setCompanyDetailId(sum.company.id); }}
-                        >
-                          {sum.company.name}
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {payments.map((p, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                    <td className="px-6 py-4 font-semibold text-slate-950 dark:text-white">{fmt(p.amount)}</td>
+                    <td className="px-6 py-4 text-xs font-mono">{fmtDate(p.paymentDate)}</td>
+                    <td className="px-6 py-4 font-semibold">
+                      {p.receiptImage ? (
+                        <a href={p.receiptImage} target="_blank" rel="noreferrer" className="text-slate-950 hover:underline dark:text-white font-semibold">
+                          View Receipt
                         </a>
-                      </td>
-                      <td>
-                        <div>{sum.company.phone}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{sum.company.address}</div>
-                      </td>
-                      <td>{sum.devicesCount}</td>
-                      <td>{showSensitive ? formatCurrency(sum.totalPurchaseValue) : '••••'}</td>
-                      <td>{formatCurrency(sum.totalPaid)}</td>
-                      <td style={{ fontWeight: 600 }}>{formatCurrency(sum.totalDue)}</td>
-                    </tr>
-                  ))
+                      ) : 'None'}
+                    </td>
+                  </tr>
+                ))}
+                {payments.length === 0 && (
+                  <tr><td colSpan={3} className="px-6 py-8 text-center text-slate-400">No payment records.</td></tr>
                 )}
-                {/* Totals Row */}
-                <tr style={{ fontWeight: 700, background: 'rgba(255,255,255,0.05)' }}>
-                  <td>Totals ({filteredSummaries.length})</td>
-                  <td></td>
-                  <td>{filteredSummaries.reduce((sum, s) => sum + s.devicesCount, 0)}</td>
-                  <td>
-                    {showSensitive ? formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.totalPurchaseValue, 0)) : '••••'}
-                  </td>
-                  <td>
-                    {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.totalPaid, 0))}
-                  </td>
-                  <td>
-                    {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.totalDue, 0))}
-                  </td>
-                </tr>
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-    </div>
+        </section>
+      </div>
+    </main>
   );
 }
 
-// ==========================================
-// 3. COMPANY DETAIL VIEW
-// ==========================================
-function CompanyDetailView({ companyId, setCompanyDetailId }) {
+// ─────────────────────────────────────────────────────────────
+// AGENTS PAGE
+// ─────────────────────────────────────────────────────────────
+
+function AgentsPage({ hasPerm, nav, onDetail, showToast, maskData, toggleMask, fmt, fmtDate }) {
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadDetails = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_URL}/companies/${companyId}`, { headers: getHeaders() });
-        if (res.ok) {
-          const resData = await res.json();
-          setData(resData);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadDetails();
-  }, [companyId]);
-
-  if (loading) return <p>Loading details...</p>;
-  if (!data) return <p>Error loading company details.</p>;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Company Ledger</p>
-          <h1 className="page-title">{data.company.name}</h1>
-          <p className="card-subtitle">{data.company.phone} · {data.company.address}</p>
-        </div>
-        <button onClick={() => setCompanyDetailId(null)} className="btn btn-secondary" style={{ gap: '8px' }}>
-          <ArrowLeft size={16} /> Back to Summary
-        </button>
-      </div>
-
-      <div className="stats-grid">
-        <div className="stat-card">
-          <span className="stat-label">Devices Purchased</span>
-          <span className="stat-value">{data.devicesPurchased}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Total Purchase</span>
-          <span className="stat-value">{formatCurrency(data.totalPurchaseAmount)}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Total Paid</span>
-          <span className="stat-value">{formatCurrency(data.totalPaid)}</span>
-          <p className="card-subtitle" style={{ color: 'var(--danger-text)' }}>Due {formatCurrency(data.remainingDue)}</p>
-        </div>
-      </div>
-
-      {/* Devices purchased list */}
-      <div className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Purchased Devices</h2>
-          <p className="card-subtitle">All devices purchased from this company.</p>
-        </div>
-        <div className="table-wrapper">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Device ID</th>
-                <th>Price</th>
-                <th>Purchased At</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.purchasedDevices.length === 0 ? (
-                <tr>
-                  <td colSpan="3" style={{ textAlign: 'center' }}>No devices purchased</td>
-                </tr>
-              ) : (
-                data.purchasedDevices.map((item, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 600 }}>{item.deviceId}</td>
-                    <td>{formatCurrency(item.purchasePrice)}</td>
-                    <td>{formatDate(item.purchasedAt)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Company Payments */}
-      <div className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Payments</h2>
-          <p className="card-subtitle">Payments sent to this company.</p>
-        </div>
-        <div className="table-wrapper">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Payment ID</th>
-                <th>Amount</th>
-                <th>Date</th>
-                <th>Receipt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.payments.length === 0 ? (
-                <tr>
-                  <td colSpan="4" style={{ textAlign: 'center' }}>No payments recorded</td>
-                </tr>
-              ) : (
-                data.payments.map((item, idx) => (
-                  <tr key={idx}>
-                    <td>{item.id}</td>
-                    <td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td>
-                    <td>{formatDate(item.paymentDate)}</td>
-                    <td>
-                      {item.receiptImage ? (
-                        <a href={item.receiptImage} target="_blank" rel="noreferrer" className="table-link">
-                          View Receipt
-                        </a>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>No Receipt</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 4. AGENTS VIEW
-// ==========================================
-function AgentsView({ hasPerm, setPath, setAgentDetailId, user }) {
-  const [agents, setAgents] = useState([]);
-  const [summaries, setSummaries] = useState([]);
-  const [devices, setDevices] = useState([]);
-  const [companies, setCompanies] = useState([]);
   const [batches, setBatches] = useState([]);
-  const [actorUsers, setActorUsers] = useState([]);
+  
+  const [search, setSearch] = useState('');
+  const [filterPendingOnly, setFilterPendingOnly] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // View States
-  const [activeFormTab, setActiveFormTab] = useState('sale'); // 'sale' | 'partner' | 'payment'
-  const [showSensitive, setShowSensitive] = useState(localStorage.getItem('showSensitive') === 'true');
-  const [showBulkUpload, setShowBulkUpload] = useState(false);
+  // Tabs for action cards
+  const [activeTab, setActiveTab] = useState('sale'); // 'sale' | 'agent' | 'payment'
 
-  // Filters State
-  const [search, setSearch] = useState('');
-  const [dueOnly, setDueOnly] = useState(false);
+  // Form States
+  const [aName, setAName] = useState('');
+  const [aPhone, setAPhone] = useState('');
+  const [aShop, setAShop] = useState('');
+  const [aPrices, setAPrices] = useState({}); // selling price for each company id
 
-  // 3-Step Wizard State
-  const [saleStep, setSaleStep] = useState(1); // 1: Partner & Mode, 2: Select Devices, 3: Confirm
-  const [wizardAgentId, setWizardAgentId] = useState('');
-  const [wizardSaleType, setWizardSaleType] = useState('INSTALLED'); // 'INSTALLED' | 'PARCELED'
-  const [wizardCustomerName, setWizardCustomerName] = useState('');
-  const [wizardCustomerPhone, setWizardCustomerPhone] = useState('');
-  const [wizardDeviceSearch, setWizardDeviceSearch] = useState('');
-  const [wizardSelectedDeviceIds, setWizardSelectedDeviceIds] = useState([]);
-  const [wizardCustomPrices, setWizardCustomPrices] = useState({}); // deviceId -> custom price string
-  const [wizardRemarks, setWizardRemarks] = useState('');
+  const [sAgent, setSAgent] = useState('');
+  const [sDevSearch, setSDevSearch] = useState('');
+  const [sDevId, setSDevId] = useState('');
+  const [sCost, setSCost] = useState(0);
+  const [sPrice, setSPrice] = useState('');
+  const [sDate, setSDate] = useState(today());
+  const [sSaleType, setSSaleType] = useState('INSTALLED'); // INSTALLED | PARCELED
+  const [sCustName, setSCustName] = useState('');
+  const [sCustPhone, setSCustPhone] = useState('');
+  const [sCarNo, setSCarNo] = useState('');
+  const [sChassisNo, setSCassisNo] = useState('');
+  const [sRemarks, setSRemarks] = useState('');
 
-  // Register / Edit Partner Form States
-  const [editAgentId, setEditAgentId] = useState(null);
-  const [partnerName, setPartnerName] = useState('');
-  const [partnerPhone, setPartnerPhone] = useState('');
-  const [partnerShop, setPartnerShop] = useState('');
-  const [partnerPrices, setPartnerPrices] = useState({}); // companyId -> price string
+  const [pyAgent, setPyAgent] = useState('');
+  const [pyAmount, setPyAmount] = useState('');
+  const [pyDate, setPyDate] = useState(today());
+  const [pyImage, setPyImage] = useState(null);
+  const [pyMethod, setPyMethod] = useState('CASH');
+  const [pyNote, setPyNote] = useState('');
 
-  // Bulk Upload Sales
-  const [bulkAgentId, setBulkAgentId] = useState('');
-  const [bulkCSVText, setBulkCSVText] = useState('');
-  const [bulkSaleType, setBulkSaleType] = useState('INSTALLED');
+  const [devDropdown, setDevDropdown] = useState([]);
+  const [bulkCsvFile, setBulkCsvFile] = useState(null);
 
-  // Payment Form States
-  const [payAgentId, setPayAgentId] = useState('');
-  const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
-  const [payMethod, setPayMethod] = useState('CASH');
-  const [payNote, setPayNote] = useState('');
-  const [payReceiptFile, setPayReceiptFile] = useState(null);
-
-  const [alert, setAlert] = useState({ show: false, msg: '', type: '' });
-
-  const loadData = async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/agents`, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setAgents(data.agents || []);
-        setSummaries(data.summaries || []);
-        setDevices(data.devices || []);
-      }
+      if (res.ok) setData(await res.json());
 
-      // Fetch companies for dynamic price map config
-      const compRes = await fetch(`${API_URL}/companies`, { headers: getHeaders() });
-      if (compRes.ok) {
-        const compData = await compRes.json();
-        setCompanies(compData.companies || []);
+      const br = await fetch(`${API_URL}/agents/sale/batches`, { headers: getHeaders() });
+      if (br.ok) {
+        const bd = await br.json();
+        setBatches(bd.batches || []);
       }
+    } catch {}
+    setLoading(false);
+  };
 
-      // Fetch historic import batches
-      const batchRes = await fetch(`${API_URL}/agents/sale/batches`, { headers: getHeaders() });
-      if (batchRes.ok) {
-        const batchData = await batchRes.json();
-        setBatches(batchData.batches || []);
-      }
+  useEffect(() => { load(); }, []);
 
-      // Fetch users for uploader mapping
-      const usersRes = await fetch(`${API_URL}/users`, { headers: getHeaders() });
-      if (usersRes.ok) {
-        const usersData = await usersRes.json();
-        setActorUsers(usersData.users || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+  const agents = data?.agents || [];
+  const summaries = data?.summaries || [];
+  const devices = data?.devices || [];
+  const companies = data?.companies || [];
+
+  const handleDevSearch = (val) => {
+    setSDevSearch(val);
+    setSDevId('');
+    if (val.length > 0) {
+      const stock = devices.filter(d => d.status === 'IN_STOCK');
+      setDevDropdown(stock.filter(d =>
+        d.id.toLowerCase().includes(val.toLowerCase()) ||
+        d.serialNumber.toLowerCase().includes(val.toLowerCase())
+      ).slice(0, 10));
+    } else {
+      setDevDropdown([]);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const selectDev = (d) => {
+    setSDevSearch(d.id);
+    setSDevId(d.id);
+    setSCost(d.purchasePrice);
+    
+    // Resolve selling price based on agent selling price setup for this company
+    const selectedAgentObj = agents.find(a => a.id === sAgent);
+    const resolvedPrice = selectedAgentObj?.defaultPrices?.[d.companyId] || d.purchasePrice;
+    setSPrice(resolvedPrice);
 
-  const triggerAlert = (msg, type = 'success') => {
-    setAlert({ show: true, msg, type });
-    setTimeout(() => setAlert({ show: false, msg: '', type: '' }), 5000);
+    setDevDropdown([]);
   };
 
-  const getAgentName = (id) => {
-    const a = agents.find(ag => ag.id === id);
-    return a ? a.name : 'Unknown Partner';
-  };
-
-  const getUserName = (id) => {
-    const u = actorUsers.find(usr => usr.id === id);
-    return u ? u.name : 'System';
-  };
-
-  const getCompanyName = (id) => {
-    const c = companies.find(comp => comp.id === id);
-    return c ? c.name : 'Unknown';
-  };
-
-  // Pricing Helpers
-  const getDeviceDefaultSellingPrice = (dev) => {
-    if (!wizardAgentId) return 0;
-    const agent = agents.find(a => a.id === wizardAgentId);
-    if (agent && agent.defaultPrices && agent.defaultPrices[dev.companyId]) {
-      return agent.defaultPrices[dev.companyId];
-    }
-    // Fallback to company default price
-    const company = companies.find(c => c.id === dev.companyId);
-    return company ? company.basePrice : 0;
-  };
-
-  // Reset wizard
-  const resetWizard = () => {
-    setSaleStep(1);
-    setWizardAgentId('');
-    setWizardSaleType('INSTALLED');
-    setWizardCustomerName('');
-    setWizardCustomerPhone('');
-    setWizardDeviceSearch('');
-    setWizardSelectedDeviceIds([]);
-    setWizardCustomPrices({});
-    setWizardRemarks('');
-  };
-
-  // Wizard Step Navigation Validations
-  const handleWizardStep1Continue = () => {
-    if (!wizardAgentId) {
-      triggerAlert('Please select a partner', 'danger');
-      return;
-    }
-    if (wizardSaleType === 'INSTALLED') {
-      if (!wizardCustomerName || !wizardCustomerPhone) {
-        triggerAlert('Customer name and phone are required for installed tracker sales', 'danger');
-        return;
-      }
-    }
-    setSaleStep(2);
-  };
-
-  const handleWizardStep2Continue = () => {
-    if (wizardSelectedDeviceIds.length === 0) {
-      triggerAlert('Please select at least one device from the stock table', 'danger');
-      return;
-    }
-    setSaleStep(3);
-  };
-
-  // Submit Sale wizard transaction
-  const handleSubmitWizardSale = async () => {
-    setLoading(true);
-    try {
-      let successCount = 0;
-      let errorMsg = '';
-
-      for (const devId of wizardSelectedDeviceIds) {
-        const device = devices.find(d => d.id === devId);
-        const resolvedDefault = getDeviceDefaultSellingPrice(device);
-        const customVal = wizardCustomPrices[devId];
-        const finalPrice = (customVal !== undefined && customVal !== '') ? Number(customVal) : resolvedDefault;
-
-        const res = await fetch(`${API_URL}/agents/sale`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({
-            agentId: wizardAgentId,
-            deviceId: devId,
-            sellingPrice: finalPrice,
-            saleType: wizardSaleType,
-            customerName: wizardCustomerName,
-            customerPhone: wizardCustomerPhone,
-            remarks: wizardRemarks
-          })
-        });
-        const data = await res.json();
-        if (res.ok) {
-          successCount++;
-        } else {
-          errorMsg = data.error || 'Failed to record one of the sales';
-        }
-      }
-
-      if (successCount === wizardSelectedDeviceIds.length) {
-        triggerAlert(`Successfully sold ${successCount} devices to partner!`);
-        resetWizard();
-        loadData();
-      } else {
-        triggerAlert(`Sold ${successCount} of ${wizardSelectedDeviceIds.length} devices. Error: ${errorMsg}`, 'danger');
-        loadData();
-      }
-    } catch (err) {
-      triggerAlert('Network error recording sale wizard', 'danger');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Bulk Sale Upload Form Submit
-  const handleBulkSaleUpload = async (e) => {
+  // Submit agent
+  const submitAgent = async (e) => {
     e.preventDefault();
-    if (!bulkAgentId || !bulkCSVText) {
-      triggerAlert('Please select a partner and paste CSV contents', 'danger');
-      return;
-    }
-    try {
-      const res = await fetch(`${API_URL}/agents/sale/bulk`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          agentId: bulkAgentId,
-          csvText: bulkCSVText,
-          saleType: bulkSaleType
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert(`Bulk sale import successful: ${data.count} devices sold!`);
-        setBulkAgentId('');
-        setBulkCSVText('');
-        setShowBulkUpload(false);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to import bulk sales', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  // Create or Edit Partner Form Submit
-  const handleCreateOrUpdatePartner = async (e) => {
-    e.preventDefault();
-    if (!partnerName || !partnerPhone || !partnerShop) {
-      triggerAlert('Name, phone, and shop name are required', 'danger');
-      return;
-    }
-
-    // Prepare body
-    const body = {
-      name: partnerName,
-      phone: partnerPhone,
-      shopName: partnerShop
-    };
-    // Include dynamic prices salePrice_company_[companyId]
-    Object.entries(partnerPrices).forEach(([compId, price]) => {
-      if (price !== '') {
-        body[`salePrice_company_${compId}`] = Number(price);
-      }
+    const payload = { name: aName, phone: aPhone, shopName: aShop };
+    Object.keys(aPrices).forEach(cid => {
+      payload[`salePrice_company_${cid}`] = Number(aPrices[cid]);
     });
 
-    try {
-      const url = editAgentId ? `${API_URL}/agents/${editAgentId}` : `${API_URL}/agents`;
-      const method = editAgentId ? 'PUT' : 'POST';
-
-      const res = await fetch(url, {
-        method,
-        headers: getHeaders(),
-        body: JSON.stringify(body)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert(`Partner ${editAgentId ? 'updated' : 'registered'} successfully!`);
-        setEditAgentId(null);
-        setPartnerName('');
-        setPartnerPhone('');
-        setPartnerShop('');
-        setPartnerPrices({});
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to register partner', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    const res = await fetch(`${API_URL}/agents`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) { 
+      showToast('Partner added successfully'); 
+      setAName(''); setAPhone(''); setAShop(''); setAPrices({});
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error adding agent', 'danger'); 
     }
   };
 
-  const handleEditPartnerClick = (agent) => {
-    setEditAgentId(agent.id);
-    setPartnerName(agent.name);
-    setPartnerPhone(agent.phone);
-    setPartnerShop(agent.shopName);
-    
-    // Map default prices
-    const prices = {};
-    if (agent.defaultPrices) {
-      Object.entries(agent.defaultPrices).forEach(([compId, val]) => {
-        prices[compId] = val;
-      });
-    }
-    setPartnerPrices(prices);
-    setActiveFormTab('partner');
-  };
-
-  // Record Payment
-  const handleAddPayment = async (e) => {
+  // Submit sale
+  const submitSale = async (e) => {
     e.preventDefault();
-    let base64Receipt = '';
-    if (payReceiptFile) {
-      base64Receipt = await fileToBase64(payReceiptFile);
+    if (!sDevId) {
+      showToast('Please select a valid device from the search dropdown', 'danger');
+      return;
     }
-    try {
-      const res = await fetch(`${API_URL}/agents/payment`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          agentId: payAgentId,
-          amount: Number(payAmount),
-          paymentDate: payDate || undefined,
-          paymentMethod: payMethod,
-          note: payNote,
-          receiptImage: base64Receipt
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Partner payment collection recorded!');
-        setPayAgentId('');
-        setPayAmount('');
-        setPayDate(new Date().toISOString().split('T')[0]);
-        setPayMethod('CASH');
-        setPayNote('');
-        setPayReceiptFile(null);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to record payment collection', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    const res = await fetch(`${API_URL}/agents/sale`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ 
+        agentId: sAgent, 
+        deviceId: sDevId, 
+        sellingPrice: Number(sPrice), 
+        soldAt: sDate,
+        saleType: sSaleType,
+        customerName: sCustName,
+        customerPhone: sCustPhone,
+        carNumber: sCarNo,
+        chassisNumber: sChassisNo,
+        remarks: sRemarks
+      }),
+    });
+    if (res.ok) { 
+      showToast('Agent sale recorded successfully'); 
+      setSAgent(''); setSDevSearch(''); setSDevId(''); setSCost(0); setSPrice(''); setSSaleType('INSTALLED');
+      setSCustName(''); setSCustPhone(''); setSCarNo(''); setSCassisNo(''); setSRemarks('');
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error recording sale', 'danger'); 
     }
   };
 
-  // Revert historic sale import batch
-  const handleRevertBatch = async (batchId) => {
-    if (!window.confirm('Are you sure you want to revert this sales batch? All devices sold in this batch will be restored back to IN_STOCK in your inventory.')) return;
+  // Submit bulk CSV sale upload
+  const submitBulkSale = async (e) => {
+    e.preventDefault();
+    if (!bulkCsvFile || !sAgent) {
+      showToast('Please select a partner and upload a CSV file', 'danger');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const csvText = event.target.result;
+      try {
+        const res = await fetch(`${API_URL}/agents/sale/bulk`, {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({ agentId: sAgent, csvText, saleType: sSaleType })
+        });
+        const d = await res.json();
+        if (res.ok) {
+          showToast(`Successfully uploaded ${d.count} sales!`);
+          setBulkCsvFile(null);
+          load();
+        } else {
+          showToast(d.error || 'Failed bulk upload', 'danger');
+        }
+      } catch {
+        showToast('Server network error', 'danger');
+      }
+    };
+    reader.readAsText(bulkCsvFile);
+  };
+
+  // Revert Partner Sale Batch
+  const handleRevertSaleBatch = async (batchId) => {
+    if (!window.confirm('Are you sure you want to revert this sales batch? Devices will be returned to stock.')) return;
     try {
       const res = await fetch(`${API_URL}/agents/sale/revert/${batchId}`, {
         method: 'POST',
         headers: getHeaders()
       });
-      const data = await res.json();
+      const d = await res.json();
       if (res.ok) {
-        triggerAlert('Sales batch reverted successfully, inventory restored!');
-        loadData();
+        showToast('Sales batch successfully reverted!');
+        load();
       } else {
-        triggerAlert(data.error || 'Failed to revert batch', 'danger');
+        showToast(d.error || 'Failed to revert sales batch', 'danger');
       }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    } catch {
+      showToast('Server network error', 'danger');
     }
   };
 
-  const handleToggleSensitive = () => {
-    const val = !showSensitive;
-    setShowSensitive(val);
-    localStorage.setItem('showSensitive', val);
+  // Submit payment
+  const submitPayment = async (e) => {
+    e.preventDefault();
+    let receiptImage = '';
+    if (pyImage) receiptImage = await fileToB64(pyImage);
+    const res = await fetch(`${API_URL}/agents/payment`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ 
+        agentId: pyAgent, 
+        amount: Number(pyAmount), 
+        paymentDate: pyDate, 
+        receiptImage,
+        paymentMethod: pyMethod,
+        note: pyNote
+      }),
+    });
+    if (res.ok) { 
+      showToast('Payment from partner recorded'); 
+      setPyAgent(''); setPyAmount(''); setPyDate(today()); setPyImage(null); setPyNote(''); setPyMethod('CASH');
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Error recording payment', 'danger'); 
+    }
   };
 
-  // Filter ledgers
+  // Filter agent summaries
   const filteredSummaries = summaries.filter(s => {
-    const nameMatch = s.agent.name.toLowerCase().includes(search.toLowerCase()) || 
-                      s.agent.shopName.toLowerCase().includes(search.toLowerCase());
-    const dueMatch = !dueOnly || s.pendingAmount > 0;
-    return nameMatch && dueMatch;
+    const matchSearch = s.agent.name.toLowerCase().includes(search.toLowerCase()) ||
+      s.agent.shopName?.toLowerCase().includes(search.toLowerCase());
+    const matchPending = !filterPendingOnly || s.pendingAmount > 0;
+    const matchSelectedAgent = !selectedAgentId || s.agent.id === selectedAgentId;
+    return matchSearch && matchPending && matchSelectedAgent;
   });
 
-  // Export ledger summary
-  const handleExportLedger = () => {
-    const headers = ['Partner Name', 'Shop / Location', 'Contact', 'Devices Sold', 'Total Sales Value', 'Amount Received', 'Outstanding Balance'];
+  const totalSold = filteredSummaries.reduce((sum, s) => sum + s.devicesSold, 0);
+  const totalSales = filteredSummaries.reduce((sum, s) => sum + s.totalSales, 0);
+  const totalReceived = filteredSummaries.reduce((sum, s) => sum + s.totalReceived, 0);
+  const totalPending = filteredSummaries.reduce((sum, s) => sum + s.pendingAmount, 0);
+  const totalProfit = filteredSummaries.reduce((sum, s) => sum + s.profitGenerated, 0);
+
+  // Export agent performance CSV
+  const handleExportPerformance = () => {
+    const headers = ['Partner Name', 'Shop', 'Phone', 'Devices Sold', 'Total Sales', 'Total Received', 'Pending Balance', 'Profit Generated'];
     const rows = filteredSummaries.map(s => [
       s.agent.name,
       s.agent.shopName,
@@ -1848,3128 +1637,1952 @@ function AgentsView({ hasPerm, setPath, setAgentDetailId, user }) {
       s.devicesSold,
       s.totalSales,
       s.totalReceived,
-      s.pendingAmount
+      s.pendingAmount,
+      maskData ? '••••' : s.profitGenerated
     ]);
-    exportToExcel(headers, rows, 'Partner_Ledger_Summary.csv');
+    exportToCSV(headers, rows, `partner_performance_${today()}.csv`);
   };
 
-  // Filter in stock devices for wizard step 2
-  const inStockDevices = devices.filter(d => {
-    if (d.status !== 'IN_STOCK') return false;
-    if (wizardDeviceSearch) {
-      const s = wizardDeviceSearch.toLowerCase();
-      return d.id.toLowerCase().includes(s) || d.serialNumber.toLowerCase().includes(s);
-    }
-    return true;
-  });
+  if (loading) return <Loader />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {/* Page Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Partners & Distributors</p>
-          <h1 className="page-title">Partners</h1>
-          <p className="card-subtitle">Manage sub-dealers, record tracker sales and collection payments, and review outstanding ledgers.</p>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Dashboard
-        </button>
-      </div>
-
-      {alert.show && (
-        <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-          {alert.msg}
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <div className="stats-grid" style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <div className="stat-card">
-          <span className="stat-label">PARTNERS</span>
-          <span className="stat-value">{agents.length}</span>
-          <span className="stat-desc">Registered sub-dealers</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">DEVICES SOLD</span>
-          <span className="stat-value">
-            {summaries.reduce((sum, s) => sum + s.devicesSold, 0)}
-          </span>
-          <span className="stat-desc">Across all partners</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">TOTAL SALES VALUE</span>
-          <span className="stat-value">
-            {formatCurrency(summaries.reduce((sum, s) => sum + s.totalSales, 0))}
-          </span>
-          <span className="stat-desc">Revenue booked</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">OUTSTANDING BALANCE</span>
-          <span className="stat-value" style={{ color: 'var(--danger-text)' }}>
-            {formatCurrency(summaries.reduce((sum, s) => sum + s.pendingAmount, 0))}
-          </span>
-          <span className="stat-desc">Awaiting collection</span>
-        </div>
-      </div>
-
-      {/* Action Tabs Panel */}
-      <section className="card-section">
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-          <h2 className="card-title">Actions</h2>
-          <p className="card-subtitle">Sell devices (3-step wizard), register partners, or collect payments — use tabs to navigate.</p>
-        </div>
-
-        <div style={{ marginTop: '20px' }}>
-          {/* Tabs header */}
-          <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-            <button 
-              type="button"
-              className={`btn ${activeFormTab === 'sale' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('sale'); }}
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Page Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Partner ledger</p>
+            <h1 className="text-4xl font-semibold">Partners</h1>
+            <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">Manage dealers, record device sales and payments, and review balances.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleMask}
+              className="rounded-full border border-slate-300 bg-white p-3 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition"
             >
-              Record Sale
+              {maskData ? '👁️' : '🔒'}
+            </button>
+            <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Dashboard
+            </button>
+          </div>
+        </div>
+
+        {/* Summary Badges */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Registered Partners</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{agents.length}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Devices Sold</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{totalSold}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Total Revenue</p>
+            <p className="text-3xl font-semibold text-slate-900 dark:text-white mt-2">{fmt(totalSales)}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Outstanding Pending</p>
+            <p className="text-3xl font-semibold text-red-600 dark:text-red-400 mt-2">{fmt(totalPending)}</p>
+          </div>
+          <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+            <p className="text-xs uppercase tracking-wider text-slate-400 font-semibold">Net Profit</p>
+            <p className="text-3xl font-semibold text-green-600 dark:text-green-400 mt-2">{fmt(totalProfit)}</p>
+          </div>
+        </div>
+
+        {/* Action Panel Tab Selector */}
+        <div className="rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <div className="flex flex-wrap gap-2 border-b border-slate-200 dark:border-slate-800 pb-4 mb-6">
+            <button 
+              onClick={() => setActiveTab('sale')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'sale' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
+            >
+              Record Partner Sale
             </button>
             <button 
-              type="button"
-              className={`btn ${activeFormTab === 'partner' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('partner'); setEditAgentId(null); setPartnerName(''); setPartnerPhone(''); setPartnerShop(''); setPartnerPrices({}); }}
+              onClick={() => setActiveTab('agent')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'agent' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
             >
-              {editAgentId ? 'Edit Partner' : 'Register Partner'}
+              New Partner
             </button>
             <button 
-              type="button"
-              className={`btn ${activeFormTab === 'payment' ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => { setActiveFormTab('payment'); }}
+              onClick={() => setActiveTab('payment')}
+              className={`rounded-full px-5 py-2 text-sm font-semibold transition ${activeTab === 'payment' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'}`}
             >
-              Partner Payment Collection
+              Record Payment
             </button>
           </div>
 
-          {/* Form Tabs panel content */}
-          {activeFormTab === 'sale' && hasPerm('AGENT_SALE') && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <h3 style={{ fontWeight: 600, fontSize: '1.1rem' }}>
-                  {showBulkUpload ? 'Bulk CSV Sale' : `Record Sale Wizard — Step ${saleStep} of 3`}
-                </h3>
-                <button 
-                  type="button" 
-                  className="btn btn-secondary"
-                  style={{ padding: '6px 12px', fontSize: '0.85rem' }}
-                  onClick={() => { setShowBulkUpload(!showBulkUpload); resetWizard(); }}
-                >
-                  {showBulkUpload ? 'Wizard sale flow' : 'Bulk CSV upload'}
-                </button>
+          {/* Tab Content forms */}
+          {activeTab === 'sale' && hasPerm('AGENT_SALE') && (
+            <div className="space-y-6">
+              <div className="border-b border-slate-100 dark:border-slate-800 pb-4">
+                <h3 className="text-lg font-semibold">Record Partner Sale</h3>
+                <p className="text-sm text-slate-500">Assign stock devices to dealers and capture customer context.</p>
               </div>
+              <div className="grid gap-8 md:grid-cols-2">
+                {/* Single Form */}
+                <form onSubmit={submitSale} className="space-y-4">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Single Sale</h4>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Which Partner? *</label>
+                    <select required value={sAgent} onChange={e => setSAgent(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                      <option value="">Select agent</option>
+                      {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Device Sale Mode *</label>
+                    <div className="flex gap-2">
+                      <button 
+                        type="button" 
+                        onClick={() => setSSaleType('INSTALLED')}
+                        className={`flex-1 rounded-xl py-3 text-sm font-semibold border ${sSaleType === 'INSTALLED' ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900 text-slate-600 dark:text-slate-400'}`}
+                      >
+                        Installed
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => setSSaleType('PARCELED')}
+                        className={`flex-1 rounded-xl py-3 text-sm font-semibold border ${sSaleType === 'PARCELED' ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900 text-slate-600 dark:text-slate-400'}`}
+                      >
+                        Parceled Only
+                      </button>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Search Device (In Stock) *</label>
+                    <input type="text" placeholder="Search device ID or serial"
+                      value={sDevSearch} onChange={e => handleDevSearch(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    {devDropdown.length > 0 && (
+                      <div className="absolute z-20 w-full rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden mt-1 dark:border-slate-800 dark:bg-slate-900">
+                        {devDropdown.map(d => (
+                          <button key={d.id} type="button" onClick={() => selectDev(d)}
+                            className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition border-b border-slate-100 dark:border-slate-850">
+                            IMEI: {d.id} (S/N: {d.serialNumber})
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Cost Price (Auto-filled)</label>
+                      <input type="number" placeholder="Cost Price" disabled value={sCost || ''}
+                        className="w-full rounded-2xl border border-slate-300 bg-slate-100 dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm text-slate-500 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-semibold text-slate-500 mb-1 block">Selling Price *</label>
+                      <input required type="number" placeholder="Selling Price" value={sPrice} onChange={e => setSPrice(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                    </div>
+                  </div>
 
-              {showBulkUpload ? (
-                <form onSubmit={handleBulkSaleUpload} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-                  <div className="form-group">
-                    <label className="form-label">Partner *</label>
-                    <select 
-                      required 
-                      className="form-select"
-                      value={bulkAgentId}
-                      onChange={e => setBulkAgentId(e.target.value)}
-                    >
-                      <option value="">Select partner</option>
-                      {agents.map(a => <option key={a.id} value={a.id}>{a.name} ({a.shopName})</option>)}
-                    </select>
+                  {sSaleType === 'INSTALLED' && (
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-3xl p-4 bg-slate-50 dark:bg-slate-950 space-y-4">
+                      <h5 className="text-xs font-bold uppercase tracking-wider text-slate-400">Customer Details</h5>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <input required placeholder="Customer Name" value={sCustName} onChange={e => setSCustName(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-sm outline-none" />
+                        <input required placeholder="Customer Phone" value={sCustPhone} onChange={e => setSCustPhone(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-sm outline-none" />
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <input required placeholder="Car Number" value={sCarNo} onChange={e => setSCarNo(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-sm outline-none" />
+                        <input required placeholder="Chassis Number" value={sChassisNo} onChange={e => setSCassisNo(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-sm outline-none" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Sold Date *</label>
+                    <input type="date" value={sDate} onChange={e => setSDate(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">Sale Mode *</label>
-                    <select 
-                      required 
-                      className="form-select"
-                      value={bulkSaleType}
-                      onChange={e => setBulkSaleType(e.target.value)}
-                    >
-                      <option value="INSTALLED">Installed (Requires customer detail headers in CSV)</option>
-                      <option value="PARCELED">Parceled (Direct sub-dealer stock assignment)</option>
-                    </select>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Remarks</label>
+                    <input placeholder="Add details..." value={sRemarks} onChange={e => setSRemarks(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
                   </div>
-                  <div className="form-group">
-                    <label className="form-label">CSV Text *</label>
-                    <textarea 
-                      required
-                      placeholder="deviceId,sellingPrice,customerName,customerPhone&#10;358250331000000,7500,John Doe,9876543210"
-                      className="form-input"
-                      style={{ minHeight: '120px', fontFamily: 'monospace', fontSize: '0.85rem' }}
-                      value={bulkCSVText}
-                      onChange={e => setBulkCSVText(e.target.value)}
-                    />
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                      CSV Headers: imei/deviceId, price/sellingPrice (optional), customerName (optional), customerPhone (optional)
-                    </span>
-                  </div>
-                  <button type="submit" className="btn btn-primary">Bulk import sales</button>
+                  <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                    Record Sale
+                  </button>
                 </form>
-              ) : (
-                <div style={{ maxWidth: '650px', margin: '0 auto' }}>
-                  {/* Wizard Step 1: Partner & Mode */}
-                  {saleStep === 1 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div className="form-group">
-                        <label className="form-label">Select Partner *</label>
-                        <select 
-                          required 
-                          className="form-select"
-                          value={wizardAgentId}
-                          onChange={e => setWizardAgentId(e.target.value)}
-                        >
-                          <option value="">Select partner</option>
-                          {agents.map(a => <option key={a.id} value={a.id}>{a.name} ({a.shopName})</option>)}
-                        </select>
-                      </div>
 
-                      <div className="form-group">
-                        <label className="form-label">Sale Mode *</label>
-                        <select 
-                          required 
-                          className="form-select"
-                          value={wizardSaleType}
-                          onChange={e => setWizardSaleType(e.target.value)}
-                        >
-                          <option value="INSTALLED">Installed (Complete installation details now)</option>
-                          <option value="PARCELED">Parceled (Assign stock only, install later)</option>
-                        </select>
-                      </div>
-
-                      {wizardSaleType === 'INSTALLED' && (
-                        <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                          <div className="form-group">
-                            <label className="form-label">Customer name *</label>
-                            <input 
-                              required 
-                              className="form-input"
-                              placeholder="e.g. Rahul Kumar"
-                              value={wizardCustomerName}
-                              onChange={e => setWizardCustomerName(e.target.value)}
-                            />
-                          </div>
-                          <div className="form-group">
-                            <label className="form-label">Customer phone *</label>
-                            <input 
-                              required 
-                              className="form-input"
-                              placeholder="10 digit mobile"
-                              value={wizardCustomerPhone}
-                              onChange={e => setWizardCustomerPhone(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
-                        <button type="button" onClick={handleWizardStep1Continue} className="btn btn-primary">
-                          Continue to select devices
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Wizard Step 2: Select Devices & Selling Price */}
-                  {saleStep === 2 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '10px' }}>
-                        <input 
-                          placeholder="Search in stock IMEI or Serial..."
-                          className="form-input"
-                          style={{ flexGrow: 1 }}
-                          value={wizardDeviceSearch}
-                          onChange={e => setWizardDeviceSearch(e.target.value)}
-                        />
-                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                          Selected: {wizardSelectedDeviceIds.length} device(s)
-                        </span>
-                      </div>
-
-                      <div className="table-wrapper" style={{ maxHeight: '350px', overflowY: 'auto' }}>
-                        <table className="custom-table">
-                          <thead>
-                            <tr>
-                              <th style={{ width: '40px' }}>Select</th>
-                              <th>IMEI / Serial</th>
-                              <th>Product Supplier</th>
-                              {showSensitive && <th>Cost Price</th>}
-                              <th>Selling Price</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {inStockDevices.length === 0 ? (
-                              <tr>
-                                <td colSpan={showSensitive ? 5 : 4} style={{ textAlign: 'center' }}>
-                                  No devices in stock match search
-                                </td>
-                              </tr>
-                            ) : (
-                              inStockDevices.map(d => {
-                                const isSelected = wizardSelectedDeviceIds.includes(d.id);
-                                const defaultPrice = getDeviceDefaultSellingPrice(d);
-                                return (
-                                  <tr key={d.id} className={isSelected ? 'row-selected' : ''}>
-                                    <td>
-                                      <input 
-                                        type="checkbox"
-                                        checked={isSelected}
-                                        onChange={e => {
-                                          if (e.target.checked) {
-                                            setWizardSelectedDeviceIds([...wizardSelectedDeviceIds, d.id]);
-                                          } else {
-                                            setWizardSelectedDeviceIds(wizardSelectedDeviceIds.filter(id => id !== d.id));
-                                          }
-                                        }}
-                                      />
-                                    </td>
-                                    <td>
-                                      <div style={{ fontWeight: 600 }}>{d.id}</div>
-                                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>S/N: {d.serialNumber}</div>
-                                    </td>
-                                    <td>
-                                      <div>{getCompanyName(d.companyId)}</div>
-                                    </td>
-                                    {showSensitive && <td>{formatCurrency(d.purchasePrice)}</td>}
-                                    <td>
-                                      <input 
-                                        type="number"
-                                        placeholder={defaultPrice || '0'}
-                                        className="form-input"
-                                        style={{ width: '100px', padding: '4px 8px', fontSize: '0.85rem' }}
-                                        value={wizardCustomPrices[d.id] || ''}
-                                        onChange={e => setWizardCustomPrices({ ...wizardCustomPrices, [d.id]: e.target.value })}
-                                      />
-                                    </td>
-                                  </tr>
-                                );
-                              })
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px' }}>
-                        <button type="button" onClick={() => setSaleStep(1)} className="btn btn-secondary">
-                          Back
-                        </button>
-                        <button type="button" onClick={handleWizardStep2Continue} className="btn btn-primary">
-                          Review & confirm sale
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Wizard Step 3: Confirmation Summary */}
-                  {saleStep === 3 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      <div className="form-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                        <h4 style={{ fontWeight: 600, borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
-                          Sale Summary Confirmation
-                        </h4>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '0.9rem' }}>
-                          <div>
-                            <span style={{ color: 'var(--text-muted)' }}>Sub-Dealer Partner:</span>
-                            <div style={{ fontWeight: 600 }}>{getAgentName(wizardAgentId)}</div>
-                          </div>
-                          <div>
-                            <span style={{ color: 'var(--text-muted)' }}>Sale Type Mode:</span>
-                            <div style={{ fontWeight: 600 }}>{wizardSaleType}</div>
-                          </div>
-                          {wizardSaleType === 'INSTALLED' && (
-                            <>
-                              <div>
-                                <span style={{ color: 'var(--text-muted)' }}>Customer Name:</span>
-                                <div style={{ fontWeight: 600 }}>{wizardCustomerName}</div>
-                              </div>
-                              <div>
-                                <span style={{ color: 'var(--text-muted)' }}>Customer Phone:</span>
-                                <div style={{ fontWeight: 600 }}>{wizardCustomerPhone}</div>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-
-                      <div style={{ fontSize: '0.9rem' }}>
-                        <h4 style={{ fontWeight: 600, marginBottom: '8px' }}>Devices sold ({wizardSelectedDeviceIds.length})</h4>
-                        <div className="table-wrapper">
-                          <table className="custom-table" style={{ fontSize: '0.85rem' }}>
-                            <thead>
-                              <tr>
-                                <th>IMEI</th>
-                                <th>Serial</th>
-                                {showSensitive && <th>Cost Price</th>}
-                                <th>Selling Price</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {wizardSelectedDeviceIds.map(devId => {
-                                const dev = devices.find(d => d.id === devId);
-                                const defaultPrice = getDeviceDefaultSellingPrice(dev);
-                                const customVal = wizardCustomPrices[devId];
-                                const finalPrice = (customVal !== undefined && customVal !== '') ? Number(customVal) : defaultPrice;
-                                return (
-                                  <tr key={devId}>
-                                    <td style={{ fontWeight: 600 }}>{devId}</td>
-                                    <td>{dev ? dev.serialNumber : ''}</td>
-                                    {showSensitive && <td>{formatCurrency(dev ? dev.purchasePrice : 0)}</td>}
-                                    <td style={{ fontWeight: 600 }}>{formatCurrency(finalPrice)}</td>
-                                  </tr>
-                                );
-                              })}
-                              {/* Summary calculations */}
-                              <tr style={{ fontWeight: 700, background: 'rgba(255,255,255,0.03)' }}>
-                                <td>Totals</td>
-                                <td></td>
-                                {showSensitive && (
-                                  <td>
-                                    {formatCurrency(wizardSelectedDeviceIds.reduce((sum, devId) => {
-                                      const dev = devices.find(d => d.id === devId);
-                                      return sum + (dev ? dev.purchasePrice : 0);
-                                    }, 0))}
-                                  </td>
-                                )}
-                                <td>
-                                  {formatCurrency(wizardSelectedDeviceIds.reduce((sum, devId) => {
-                                    const dev = devices.find(d => d.id === devId);
-                                    const defaultPrice = getDeviceDefaultSellingPrice(dev);
-                                    const customVal = wizardCustomPrices[devId];
-                                    const finalPrice = (customVal !== undefined && customVal !== '') ? Number(customVal) : defaultPrice;
-                                    return sum + finalPrice;
-                                  }, 0))}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-
-                      <div className="form-group">
-                        <label className="form-label">Remarks (Optional)</label>
-                        <input 
-                          className="form-input"
-                          placeholder="Add notes for this sale transaction..."
-                          value={wizardRemarks}
-                          onChange={e => setWizardRemarks(e.target.value)}
-                        />
-                      </div>
-
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px' }}>
-                        <button type="button" onClick={() => setSaleStep(2)} className="btn btn-secondary">
-                          Back to select devices
-                        </button>
-                        <button type="button" onClick={handleSubmitWizardSale} className="btn btn-primary">
-                          Record Sale Transaction
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                {/* Bulk Form */}
+                <form onSubmit={submitBulkSale} className="space-y-4 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 md:pl-8 pt-6 md:pt-0">
+                  <h4 className="text-sm font-semibold text-slate-400 uppercase tracking-wider">Bulk Sales Import</h4>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Partner *</label>
+                    <select required value={sAgent} onChange={e => setSAgent(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                      <option value="">Select agent</option>
+                      {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Import Mode *</label>
+                    <select required value={sSaleType} onChange={e => setSSaleType(e.target.value)}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                      <option value="INSTALLED">Installed Sales</option>
+                      <option value="PARCELED">Parceled Sales</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-500 mb-1 block">Upload CSV File *</label>
+                    <input type="file" required accept=".csv" onChange={e => setBulkCsvFile(e.target.files[0])}
+                      className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400" />
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-2xl text-xs text-slate-500 space-y-1">
+                    <p className="font-semibold text-slate-700 dark:text-slate-300">Required CSV Columns:</p>
+                    <p>• imei / deviceid / device id</p>
+                    <p>• price / sellingprice</p>
+                    <p>For Installed mode: customer, phone, car, chassis</p>
+                  </div>
+                  <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                    Upload CSV Sales
+                  </button>
+                </form>
+              </div>
             </div>
           )}
 
-          {activeFormTab === 'partner' && hasPerm('AGENT_CREATE') && (
-            <form onSubmit={handleCreateOrUpdatePartner} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-              <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>
-                {editAgentId ? 'Edit Partner details' : 'Register new sub-dealer partner'}
-              </h3>
+          {activeTab === 'agent' && hasPerm('AGENT_CREATE') && (
+            <form onSubmit={submitAgent} className="space-y-4 max-w-xl animate-fade-in">
+              <h3 className="text-lg font-semibold">New Partner</h3>
+              <p className="text-sm text-slate-500">Contact details and per-company default selling prices.</p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Partner Name *</label>
+                  <input required placeholder="e.g. AJEET" value={aName} onChange={e => setAName(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Phone Number *</label>
+                  <input required placeholder="10 digit Mobile" value={aPhone} onChange={e => setAPhone(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Shop / Location *</label>
+                <input required placeholder="Shop Name / Address" value={aShop} onChange={e => setAShop(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+              </div>
               
-              <div className="form-group">
-                <label className="form-label">Partner name *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={partnerName}
-                  onChange={e => setPartnerName(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Phone *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={partnerPhone}
-                  onChange={e => setPartnerPhone(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Shop name / location *</label>
-                <input 
-                  required 
-                  className="form-input"
-                  value={partnerShop}
-                  onChange={e => setPartnerShop(e.target.value)}
-                />
-              </div>
-
-              {/* Dynamic Prices Config Section */}
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '8px' }}>
-                <h4 style={{ fontWeight: 600, fontSize: '0.95rem', marginBottom: '12px' }}>
-                  Default Pricing Configuration (Optional)
-                </h4>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
-                  Define custom partner default selling prices per company supplier. Unset values fall back to company default pricing.
-                </p>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {companies.length === 0 ? (
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>No companies suppliers available</p>
-                  ) : (
-                    companies.map(comp => (
-                      <div key={comp.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', alignItems: 'center' }}>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>{comp.name}</span>
-                        <input 
-                          type="number"
-                          placeholder={`Company default: ₹${comp.basePrice}`}
-                          className="form-input"
-                          style={{ padding: '6px 12px', fontSize: '0.85rem' }}
-                          value={partnerPrices[comp.id] || ''}
-                          onChange={e => setPartnerPrices({ ...partnerPrices, [comp.id]: e.target.value })}
-                        />
-                      </div>
-                    ))
-                  )}
+              <div className="border border-slate-200 dark:border-slate-800 rounded-3xl p-4 bg-slate-50 dark:bg-slate-950 space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Per-Company Selling Prices</h4>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {companies.map(c => (
+                    <div key={c.id}>
+                      <label className="text-xs text-slate-650 dark:text-slate-405 mb-1 block">{c.name} price</label>
+                      <input 
+                        type="number"
+                        placeholder="Price"
+                        value={aPrices[c.id] || ''}
+                        onChange={e => setAPrices({...aPrices, [c.id]: e.target.value})}
+                        className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-sm outline-none"
+                      />
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <button type="submit" className="btn btn-primary" style={{ marginTop: '12px' }}>
-                {editAgentId ? 'Save details' : 'Register partner'}
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Create Partner
               </button>
             </form>
           )}
 
-          {activeFormTab === 'payment' && hasPerm('AGENT_PAYMENT') && (
-            <form onSubmit={handleAddPayment} style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '500px', margin: '0 auto' }}>
-              <h3 style={{ fontWeight: 600, fontSize: '1.1rem', textAlign: 'center' }}>Record collection payment</h3>
-              
-              <div className="form-group">
-                <label className="form-label">Partner *</label>
-                <select 
-                  required 
-                  className="form-select"
-                  value={payAgentId}
-                  onChange={e => setPayAgentId(e.target.value)}
-                >
-                  <option value="">Select partner</option>
-                  {agents.map(a => <option key={a.id} value={a.id}>{a.name} ({a.shopName})</option>)}
+          {activeTab === 'payment' && hasPerm('AGENT_PAYMENT') && (
+            <form onSubmit={submitPayment} className="space-y-4 max-w-xl animate-fade-in">
+              <h3 className="text-lg font-semibold">Record Agent Payment</h3>
+              <p className="text-sm text-slate-500">Record payments received from partners.</p>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Select Partner *</label>
+                <select required value={pyAgent} onChange={e => setPyAgent(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
+                  <option value="">Select agent</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                 </select>
               </div>
-
-              <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                <div className="form-group">
-                  <label className="form-label">Payment Amount *</label>
-                  <input 
-                    type="number"
-                    required 
-                    className="form-input"
-                    value={payAmount}
-                    onChange={e => setPayAmount(e.target.value)}
-                  />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Payment Amount (INR) *</label>
+                  <input required type="number" placeholder="Amount" value={pyAmount} onChange={e => setPyAmount(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
                 </div>
-                <div className="form-group">
-                  <label className="form-label">Payment Method *</label>
-                  <select 
-                    required 
-                    className="form-select"
-                    value={payMethod}
-                    onChange={e => setPayMethod(e.target.value)}
-                  >
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Payment Method *</label>
+                  <select value={pyMethod} onChange={e => setPyMethod(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400">
                     <option value="CASH">CASH</option>
-                    <option value="ONLINE">ONLINE (UPI/IMPS)</option>
-                    <option value="CHQ">CHEQUE</option>
+                    <option value="BANK">BANK TRANSFER</option>
+                    <option value="UPI">UPI</option>
+                    <option value="CHEQUE">CHEQUE</option>
                   </select>
                 </div>
               </div>
-
-              <div className="form-group">
-                <label className="form-label">Payment Date</label>
-                <input 
-                  type="date"
-                  className="form-input"
-                  value={payDate}
-                  onChange={e => setPayDate(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Remarks / Collection Notes</label>
-                <input 
-                  className="form-input"
-                  placeholder="e.g. UPI transaction ID, cheque number..."
-                  value={payNote}
-                  onChange={e => setPayNote(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Receipt Photo (optional)</label>
-                <div className="file-upload-wrapper">
-                  <button type="button" className="file-upload-btn">
-                    <Upload size={16} /> {payReceiptFile ? payReceiptFile.name : 'Upload payment screenshot'}
-                  </button>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    className="file-upload-input"
-                    onChange={e => setPayReceiptFile(e.target.files[0])}
-                  />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Payment Date *</label>
+                  <input type="date" value={pyDate} onChange={e => setPyDate(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Receipt Receipt Image</label>
+                  <input type="file" accept="image/*" onChange={e => setPyImage(e.target.files[0])}
+                    className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400" />
                 </div>
               </div>
-
-              <button type="submit" className="btn btn-primary">Record collection payment</button>
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Transaction Note</label>
+                <input placeholder="Receipt reference..." value={pyNote} onChange={e => setPyNote(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-400" />
+              </div>
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Record Payment
+              </button>
             </form>
           )}
         </div>
-      </section>
 
-      {/* CSV Sales Upload Batches History */}
-      {batches.length > 0 && (
-        <section className="card-section">
-          <div className="card-title-group">
-            <h2 className="card-title">Historic import history</h2>
-            <p className="card-subtitle">Every sales bulk import is saved as a batch. Reverting restores the devices to IN_STOCK.</p>
+        {/* Bulk Sales batches uploads */}
+        {batches.length > 0 && (
+          <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold">Bulk Sale Upload History</h2>
+              <p className="text-sm text-slate-500">Each CSV upload sale batch is saved. Revert returns all parceled/installed devices back to stock.</p>
+            </div>
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Uploaded At</th>
+                    <th className="px-6 py-4">Partner</th>
+                    <th className="px-6 py-4">Sales Counts</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {batches.map(b => {
+                    const agent = agents.find(a => a.id === b.agentId);
+                    return (
+                      <tr key={b.id} className="hover:bg-slate-50 dark:hover:bg-slate-900 transition text-slate-700 dark:text-slate-300">
+                        <td className="px-6 py-4 font-mono text-xs">{fmtDate(b.createdAt)}</td>
+                        <td className="px-6 py-4 font-semibold">{agent?.name || 'Unknown'}</td>
+                        <td className="px-6 py-4">{b.imported} (Installed: {b.installed}, Parceled: {b.parceled})</td>
+                        <td className="px-6 py-4">
+                          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            b.status === 'REVERTED' ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-400'
+                          }`}>
+                            {b.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          {b.status !== 'REVERTED' && (
+                            <button onClick={() => handleRevertSaleBatch(b.id)} className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 hover:bg-red-100 dark:border-red-950 dark:bg-red-950/20 dark:text-red-400 dark:hover:bg-red-950/40 transition">
+                              Revert
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* Partner Performance Summary */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm shadow-slate-200/40 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-none transition">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold text-slate-950 dark:text-white">Partner Performance</h2>
+              <p className="text-sm leading-6 text-slate-600 dark:text-slate-400">Choose a partner to review sales, collections, and pending balances.</p>
+            </div>
+            <button onClick={handleExportPerformance} className="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Export Excel
+            </button>
           </div>
-          <div className="table-wrapper" style={{ marginTop: '20px' }}>
-            <table className="custom-table">
-              <thead>
+
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between font-semibold">
+              <div className="flex flex-wrap items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="checkbox"
+                    id="pendingOnly"
+                    checked={filterPendingOnly}
+                    onChange={e => setFilterPendingOnly(e.target.checked)}
+                    className="w-4 h-4 rounded border-slate-300 text-slate-900 outline-none"
+                  />
+                  <label htmlFor="pendingOnly" className="text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
+                    Pending balances only
+                  </label>
+                </div>
+                
+                <select value={selectedAgentId} onChange={e => setSelectedAgentId(e.target.value)}
+                  className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">All Partners</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+
+              <input
+                placeholder="Search partner..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:w-64"
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Partner</th>
+                    <th className="px-6 py-4">Devices Sold</th>
+                    <th className="px-6 py-4">Total Sales</th>
+                    <th className="px-6 py-4">Total Received</th>
+                    <th className="px-6 py-4">Pending Balance</th>
+                    <th className="px-6 py-4">Profit Generated</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredSummaries.map(s => (
+                    <tr key={s.agent.id} className="transition hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                      <td className="px-6 py-4 font-semibold text-slate-900 dark:text-white">
+                        <button
+                          onClick={() => onDetail(s.agent.id)}
+                          className="text-left text-slate-950 hover:underline dark:text-white"
+                        >
+                          {s.agent.name}
+                        </button>
+                        <div className="text-xs text-slate-400 font-normal mt-1">Shop: {s.agent.shopName} · Phone: {s.agent.phone}</div>
+                      </td>
+                      <td className="px-6 py-4 font-mono">{s.devicesSold}</td>
+                      <td className="px-6 py-4">{fmt(s.totalSales)}</td>
+                      <td className="px-6 py-4">{fmt(s.totalReceived)}</td>
+                      <td className={`px-6 py-4 font-semibold ${s.pendingAmount > 0 ? 'text-red-600 dark:text-red-400' : ''}`}>
+                        {fmt(s.pendingAmount)}
+                      </td>
+                      <td className="px-6 py-4 text-green-600 dark:text-green-400">{fmt(s.profitGenerated)}</td>
+                    </tr>
+                  ))}
+                  {filteredSummaries.length === 0 && (
+                    <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400">No records matching search.</td></tr>
+                  )}
+                  {/* Totals row */}
+                  {filteredSummaries.length > 0 && (
+                    <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white font-bold">
+                      <td className="px-6 py-4">Totals</td>
+                      <td className="px-6 py-4 font-mono">{totalSold}</td>
+                      <td className="px-6 py-4">{fmt(totalSales)}</td>
+                      <td className="px-6 py-4">{fmt(totalReceived)}</td>
+                      <td className="px-6 py-4 text-red-600 dark:text-red-400">{fmt(totalPending)}</td>
+                      <td className="px-6 py-4 text-green-600 dark:text-green-400">{fmt(totalProfit)}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// AGENT DETAIL PAGE
+// ─────────────────────────────────────────────────────────────
+
+function AgentDetailPage({ id, nav, hasPerm, showToast, maskData, toggleMask, fmt, fmtDate }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/agents/${id}`, { headers: getHeaders() });
+      if (res.ok) setData(await res.json());
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [id]);
+
+  if (loading) return <Loader />;
+  if (!data) return <div className="p-8 text-center text-slate-400">Partner not found.</div>;
+
+  const { agent, soldDevices = [], payments = [] } = data;
+
+  return (
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Partner Details</p>
+            <h1 className="text-4xl font-semibold mt-1">{agent.name}</h1>
+            <p className="text-sm text-slate-500 mt-1">{agent.phone} · Shop: {agent.shopName}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleMask}
+              className="rounded-full border border-slate-300 bg-white p-3 text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 transition"
+            >
+              {maskData ? '👁️' : '🔒'}
+            </button>
+            <button onClick={() => nav('/agents')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Back to Partners
+            </button>
+          </div>
+        </div>
+
+        {/* Sales Table */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <h2 className="text-xl font-semibold">Sales History</h2>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
                 <tr>
-                  <th>Import Date</th>
-                  <th>Sub-Dealer Partner</th>
-                  <th>Uploader</th>
-                  <th>Status</th>
-                  <th>Imported sales</th>
-                  <th>Action</th>
+                  <th className="px-6 py-4">Device IMEI</th>
+                  <th className="px-6 py-4">Mode</th>
+                  <th className="px-6 py-4">Cost Price</th>
+                  <th className="px-6 py-4">Selling Price</th>
+                  <th className="px-6 py-4">Customer</th>
+                  <th className="px-6 py-4">Date Sold</th>
                 </tr>
               </thead>
-              <tbody>
-                {batches.map((b, idx) => (
-                  <tr key={idx}>
-                    <td>{new Date(b.uploadedAt).toLocaleString('en-IN')}</td>
-                    <td>{getAgentName(b.agentId)}</td>
-                    <td>{getUserName(b.uploadedByUserId)}</td>
-                    <td>
-                      <span className={`badge ${b.status === 'ACTIVE' ? 'badge-active' : 'badge-disabled'}`}>
-                        {b.status}
-                      </span>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {soldDevices.map((s, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                    <td className="px-6 py-4 font-mono text-xs font-semibold">{s.deviceId}</td>
+                    <td className="px-6 py-4 font-semibold text-xs uppercase tracking-wider">{s.saleType}</td>
+                    <td className="px-6 py-4 font-mono">{fmt(s.costPrice)}</td>
+                    <td className="px-6 py-4 font-mono font-semibold">{fmt(s.sellingPrice)}</td>
+                    <td className="px-6 py-4 font-semibold">
+                      {s.customerName ? (
+                        <>
+                          {s.customerName}
+                          <div className="text-xs text-slate-450 font-normal">{s.customerPhone} · {s.carNumber}</div>
+                        </>
+                      ) : '—'}
                     </td>
-                    <td>
-                      {b.imported} device(s) 
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                        ({b.installed} inst / {b.parceled} parc)
-                      </span>
-                    </td>
-                    <td>
-                      {b.status === 'ACTIVE' && (
-                        <button 
-                          onClick={() => handleRevertBatch(b.id)} 
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.8rem', color: 'var(--text-danger)' }}
-                        >
-                          Revert
-                        </button>
-                      )}
-                    </td>
+                    <td className="px-6 py-4 text-xs font-mono">{fmtDate(s.soldAt)}</td>
                   </tr>
                 ))}
+                {soldDevices.length === 0 && (
+                  <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400">No sale records yet.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
         </section>
-      )}
 
-      {/* Partner Ledger summaries */}
-      <section className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Sub-dealer partner ledger summary</h2>
-          <p className="card-subtitle">Filter by search name, outstanding balances, and check margins or edit details.</p>
-        </div>
-
-        {/* Filters and Controls */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '20px', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flexGrow: 1, minWidth: '200px' }}>
-            <label className="form-label">Search partners</label>
-            <input 
-              placeholder="Search by partner name or shop..."
-              className="form-input"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-          </div>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center', height: '42px' }}>
-            <label style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer', fontSize: '0.9rem' }}>
-              <input 
-                type="checkbox" 
-                checked={dueOnly}
-                onChange={e => setDueOnly(e.target.checked)}
-              />
-              Outstanding balance only
-            </label>
-            <button 
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleToggleSensitive}
-            >
-              {showSensitive ? 'Hide Purchase & Costs' : 'Show purchase, cost & profit'}
-            </button>
-          </div>
-          <button onClick={handleExportLedger} className="btn btn-secondary">
-            Export Excel
-          </button>
-        </div>
-
-        {loading ? (
-          <p style={{ marginTop: '20px' }}>Loading ledgers...</p>
-        ) : (
-          <div className="table-wrapper" style={{ marginTop: '24px' }}>
-            <table className="custom-table">
-              <thead>
+        {/* Payments Table */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <h2 className="text-xl font-semibold">Payments Received</h2>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
                 <tr>
-                  <th>Partner details</th>
-                  <th>Shop / Location</th>
-                  <th>Contact</th>
-                  <th>Devices sold</th>
-                  <th>Sales Value</th>
-                  <th>Collected</th>
-                  <th>Balance Due</th>
-                  {showSensitive && <th>Profit margin</th>}
-                  <th>Action</th>
+                  <th className="px-6 py-4">Amount</th>
+                  <th className="px-6 py-4">Method</th>
+                  <th className="px-6 py-4">Date Recorded</th>
+                  <th className="px-6 py-4">Note</th>
+                  <th className="px-6 py-4">Receipt</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredSummaries.length === 0 ? (
-                  <tr>
-                    <td colSpan={showSensitive ? 9 : 8} style={{ textAlign: 'center' }}>
-                      No partner summaries matching filters
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {payments.map((p, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                    <td className="px-6 py-4 font-semibold text-slate-950 dark:text-white">{fmt(p.amount)}</td>
+                    <td className="px-6 py-4 text-xs font-semibold">{p.paymentMethod}</td>
+                    <td className="px-6 py-4 text-xs font-mono">{fmtDate(p.paymentDate)}</td>
+                    <td className="px-6 py-4 text-slate-500 text-xs">{p.note || '—'}</td>
+                    <td className="px-6 py-4 font-semibold">
+                      {p.receiptImage ? (
+                        <a href={p.receiptImage} target="_blank" rel="noreferrer" className="text-slate-950 hover:underline dark:text-white font-semibold">
+                          View Receipt
+                        </a>
+                      ) : 'None'}
                     </td>
                   </tr>
-                ) : (
-                  filteredSummaries.map((sum, index) => (
-                    <tr key={index}>
-                      <td>
-                        <a 
-                          href="#" 
-                          style={{ fontWeight: 600, textDecoration: 'underline' }}
-                          onClick={(e) => { e.preventDefault(); setAgentDetailId(sum.agent.id); }}
-                        >
-                          {sum.agent.name}
-                        </a>
-                      </td>
-                      <td>{sum.agent.shopName}</td>
-                      <td>{sum.agent.phone}</td>
-                      <td>{sum.devicesSold}</td>
-                      <td>{formatCurrency(sum.totalSales)}</td>
-                      <td>{formatCurrency(sum.totalReceived)}</td>
-                      <td style={{ fontWeight: 600, color: sum.pendingAmount > 0 ? 'var(--danger-text)' : 'inherit' }}>
-                        {formatCurrency(sum.pendingAmount)}
-                      </td>
-                      {showSensitive && (
-                        <td style={{ color: 'var(--success-text)', fontWeight: 600 }}>
-                          {formatCurrency(sum.profitGenerated)}
-                        </td>
-                      )}
-                      <td>
-                        <button 
-                          onClick={() => handleEditPartnerClick(sum.agent)} 
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                        >
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                ))}
+                {payments.length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No payment history.</td></tr>
                 )}
-                {/* Totals Row */}
-                <tr style={{ fontWeight: 700, background: 'rgba(255,255,255,0.05)' }}>
-                  <td>Totals ({filteredSummaries.length})</td>
-                  <td></td>
-                  <td></td>
-                  <td>{filteredSummaries.reduce((sum, s) => sum + s.devicesSold, 0)}</td>
-                  <td>
-                    {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.totalSales, 0))}
-                  </td>
-                  <td>
-                    {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.totalReceived, 0))}
-                  </td>
-                  <td>
-                    {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.pendingAmount, 0))}
-                  </td>
-                  {showSensitive && (
-                    <td>
-                      {formatCurrency(filteredSummaries.reduce((sum, s) => sum + s.profitGenerated, 0))}
-                    </td>
-                  )}
-                  <td></td>
-                </tr>
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-    </div>
+        </section>
+      </div>
+    </main>
   );
 }
 
-// ==========================================
-// 5. AGENT DETAIL VIEW
-// ==========================================
-function AgentDetailView({ agentId, setAgentDetailId }) {
+// ─────────────────────────────────────────────────────────────
+// DEVICES INVENTORY PAGE
+// ─────────────────────────────────────────────────────────────
+
+function DevicesPage({ user, hasPerm, nav, showToast, isDark, toggleTheme, maskData, toggleMask, fmt, fmtDate }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const loadDetails = async () => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${API_URL}/agents/${agentId}`, { headers: getHeaders() });
-        if (res.ok) {
-          const resData = await res.json();
-          setData(resData);
-        }
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadDetails();
-  }, [agentId]);
-
-  if (loading) return <p>Loading details...</p>;
-  if (!data) return <p>Error loading agent details.</p>;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Agent Ledger</p>
-          <h1 className="page-title">{data.agent.name}</h1>
-          <p className="card-subtitle">{data.agent.shopName} · {data.agent.phone}</p>
-        </div>
-        <button onClick={() => setAgentDetailId(null)} className="btn btn-secondary" style={{ gap: '8px' }}>
-          <ArrowLeft size={16} /> Back to Summary
-        </button>
-      </div>
-
-      <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-        <div className="stat-card">
-          <span className="stat-label">Devices Sold</span>
-          <span className="stat-value">{data.devicesSold}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Total Sales</span>
-          <span className="stat-value">{formatCurrency(data.totalSales)}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Total Received</span>
-          <span className="stat-value">{formatCurrency(data.totalReceived)}</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">Pending Amount</span>
-          <span className="stat-value">{formatCurrency(data.pendingAmount)}</span>
-          <p className="card-subtitle" style={{ color: 'var(--success-text)' }}>Profit {formatCurrency(data.profitGenerated)}</p>
-        </div>
-      </div>
-
-      {/* Sold devices */}
-      <div className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Sold Devices</h2>
-          <p className="card-subtitle">Devices sold by this agent.</p>
-        </div>
-        <div className="table-wrapper">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Device ID</th>
-                <th>Cost Price</th>
-                <th>Selling Price</th>
-                <th>Sold At</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.soldDevices.length === 0 ? (
-                <tr>
-                  <td colSpan="4" style={{ textAlign: 'center' }}>No devices sold</td>
-                </tr>
-              ) : (
-                data.soldDevices.map((item, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 600 }}>{item.deviceId}</td>
-                    <td>{formatCurrency(item.costPrice)}</td>
-                    <td>{formatCurrency(item.sellingPrice)}</td>
-                    <td>{formatDate(item.soldAt)}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Payments collected */}
-      <div className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Payments</h2>
-          <p className="card-subtitle">Payments collected from this agent.</p>
-        </div>
-        <div className="table-wrapper">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Payment ID</th>
-                <th>Amount</th>
-                <th>Date</th>
-                <th>Receipt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.payments.length === 0 ? (
-                <tr>
-                  <td colSpan="4" style={{ textAlign: 'center' }}>No payments recorded</td>
-                </tr>
-              ) : (
-                data.payments.map((item, idx) => (
-                  <tr key={idx}>
-                    <td>{item.id}</td>
-                    <td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td>
-                    <td>{formatDate(item.paymentDate)}</td>
-                    <td>
-                      {item.receiptImage ? (
-                        <a href={item.receiptImage} target="_blank" rel="noreferrer" className="table-link">
-                          View Receipt
-                        </a>
-                      ) : (
-                        <span style={{ color: 'var(--text-muted)' }}>No Receipt</span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 6. DEVICES VIEW
-// ==========================================
-function DevicesView({ hasPerm, setPath, user }) {
-  const [devices, setDevices] = useState([]);
-  const [purchaseItems, setPurchaseItems] = useState([]);
-  const [agentSaleItems, setAgentSaleItems] = useState([]);
-  const [installations, setInstallations] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [deletedDevices, setDeletedDevices] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  // Layout & Navigation Tabs
-  const [activeTab, setActiveTab] = useState('registry'); // 'registry' | 'deleted'
-  const [layoutMode, setLayoutMode] = useState('table'); // 'table' | 'cards'
-  const [showSensitive, setShowSensitive] = useState(localStorage.getItem('showSensitive') === 'true');
-
-  // Filters State
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [companyFilter, setCompanyFilter] = useState('ALL');
-  const [agentFilter, setAgentFilter] = useState('ALL');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [sortBy, setSortBy] = useState('id');
-  const [sortOrder, setSortOrder] = useState('asc');
+  const [filterStatus, setFilterStatus] = useState('ALL');
+  const [filterCompany, setFilterCompany] = useState('');
+  const [filterAgent, setFilterAgent] = useState('');
+  
+  const [viewMode, setViewMode] = useState('cards'); // 'cards' | 'table'
+  const [selectedDevice, setSelectedDevice] = useState(null); // Detail modal
 
-  // Complete Install Modal State
-  const [showInstallModal, setShowInstallModal] = useState(false);
-  const [installDeviceId, setInstallDeviceId] = useState('');
-  const [installCustomerName, setInstallCustomerName] = useState('');
-  const [installCustomerPhone, setInstallCustomerPhone] = useState('');
-  const [installAlternatePhone, setInstallAlternatePhone] = useState('');
-  const [installCarNumber, setInstallCarNumber] = useState('');
-  const [installChassisNumber, setInstallChassisNumber] = useState('');
-  const [installDate, setInstallDate] = useState(new Date().toISOString().split('T')[0]);
-  const [installRemarks, setInstallRemarks] = useState('');
+  // Pagination
+  const [page, setPage] = useState(1);
+  const PER_PAGE = 12;
 
-  const [alert, setAlert] = useState({ show: false, msg: '', type: '' });
-
-  const loadData = async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/devices`, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setDevices(data.devices || []);
-        setPurchaseItems(data.purchaseItems || []);
-        setAgentSaleItems(data.agentSaleItems || []);
-        setInstallations(data.installations || []);
-        setAgents(data.agents || []);
-        setCompanies(data.companies || []);
-      }
-
-      // Fetch soft-deleted logs
-      const delRes = await fetch(`${API_URL}/devices/deleted`, { headers: getHeaders() });
-      if (delRes.ok) {
-        const delData = await delRes.json();
-        setDeletedDevices(delData.deletedDevices || []);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
+      if (res.ok) setData(await res.json());
+    } catch {}
+    setLoading(false);
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  useEffect(() => { load(); }, []);
 
-  const triggerAlert = (msg, type = 'success') => {
-    setAlert({ show: true, msg, type });
-    setTimeout(() => setAlert({ show: false, msg: '', type: '' }), 5000);
-  };
+  if (loading) return <Loader />;
 
-  const getDeviceCompany = (devId) => {
-    const pItem = purchaseItems.find(p => p.deviceId === devId);
-    if (!pItem) return '';
-    const comp = companies.find(c => c.id === pItem.companyId);
-    return comp ? comp.name : '';
-  };
+  const devices = data?.devices || [];
+  const companies = data?.companies || [];
+  const agents = data?.agents || [];
+  const purchaseItems = data?.purchaseItems || [];
+  const agentSaleItems = data?.agentSaleItems || [];
+  const installations = data?.installations || [];
 
-  const getDeviceCompanyId = (devId) => {
-    const pItem = purchaseItems.find(p => p.deviceId === devId);
-    return pItem ? pItem.companyId : '';
-  };
+  const filtered = devices.filter(d => {
+    const pi = purchaseItems.find(p => p.deviceId === d.id);
+    const si = agentSaleItems.find(s => s.deviceId === d.id);
+    const matchSearch = !search ||
+      d.id.toLowerCase().includes(search.toLowerCase()) ||
+      d.serialNumber.toLowerCase().includes(search.toLowerCase()) ||
+      d.currentOwner?.toLowerCase().includes(search.toLowerCase());
+    
+    const matchStatus = filterStatus === 'ALL' || d.status === filterStatus;
+    const matchCompany = !filterCompany || pi?.companyId === filterCompany;
+    const matchAgent = !filterAgent || si?.agentId === filterAgent;
 
-  const getDeviceAgent = (devId) => {
-    const sItem = agentSaleItems.find(s => s.deviceId === devId);
-    if (!sItem) return '';
-    const ag = agents.find(a => a.id === sItem.agentId);
-    return ag ? ag.name : '';
-  };
+    return matchSearch && matchStatus && matchCompany && matchAgent;
+  });
 
-  const getDeviceAgentId = (devId) => {
-    const sItem = agentSaleItems.find(s => s.deviceId === devId);
-    return sItem ? sItem.agentId : '';
-  };
+  const totalPages = Math.ceil(filtered.length / PER_PAGE);
+  const paged = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
-  const getDeviceSalePrice = (devId) => {
-    const sItem = agentSaleItems.find(s => s.deviceId === devId);
-    return sItem ? sItem.sellingPrice : 0;
-  };
+  // Quick stats
+  const totalCount = devices.length;
+  const inStockCount = devices.filter(d => d.status === 'IN_STOCK').length;
+  const withPartnerCount = devices.filter(d => d.status === 'SOLD_TO_AGENT').length;
+  const installedCount = devices.filter(d => d.status === 'INSTALLED').length;
 
-  const getDevicePurchaseDate = (devId) => {
-    const pItem = purchaseItems.find(p => p.deviceId === devId);
-    return pItem ? new Date(pItem.purchasedAt) : new Date(0);
-  };
-
-  const getDeviceInstallDate = (devId) => {
-    const inst = installations.find(i => i.deviceId === devId);
-    return inst ? new Date(inst.installedAt) : null;
-  };
-
-  // Actions
   const handleDeleteDevice = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this device? It will be soft-deleted and archived in the deleted logs.')) return;
+    if (!window.confirm('Delete device permanently from stock? This action is irreversible.')) return;
     try {
       const res = await fetch(`${API_URL}/devices/${id}`, {
         method: 'DELETE',
         headers: getHeaders()
       });
-      const data = await res.json();
+      const d = await res.json();
       if (res.ok) {
-        triggerAlert('Device soft-deleted and moved to archives.');
-        loadData();
+        showToast('Device deleted successfully');
+        setSelectedDevice(null);
+        load();
       } else {
-        triggerAlert(data.error || 'Failed to delete device', 'danger');
+        showToast(d.error || 'Failed to delete device', 'danger');
       }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    } catch {
+      showToast('Delete request failed', 'danger');
     }
   };
-
-  const handleRestoreDevice = async (id) => {
-    if (!window.confirm('Restore this device back to your active inventory?')) return;
-    try {
-      const res = await fetch(`${API_URL}/devices/deleted/restore/${id}`, {
-        method: 'POST',
-        headers: getHeaders()
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Device successfully restored to stock!');
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to restore device', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  // Open Install Wizard for Parceled
-  const handleOpenInstallModal = (dev) => {
-    setInstallDeviceId(dev.id);
-    const saleItem = agentSaleItems.find(s => s.deviceId === dev.id);
-    if (saleItem) {
-      setInstallCustomerName(saleItem.customerName || '');
-      setInstallCustomerPhone(saleItem.customerPhone || '');
-    } else {
-      setInstallCustomerName('');
-      setInstallCustomerPhone('');
-    }
-    setInstallAlternatePhone('');
-    setInstallCarNumber('');
-    setInstallChassisNumber('');
-    setInstallRemarks('');
-    setInstallDate(new Date().toISOString().split('T')[0]);
-    setShowInstallModal(true);
-  };
-
-  const handleCompleteInstallSubmit = async (e) => {
-    e.preventDefault();
-    if (!installCustomerName || !installCustomerPhone || !installCarNumber || !installChassisNumber) {
-      triggerAlert('Please fill out all required fields to complete installation', 'danger');
-      return;
-    }
-    try {
-      const res = await fetch(`${API_URL}/installations`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          deviceId: installDeviceId,
-          customerName: installCustomerName,
-          customerPhone: installCustomerPhone,
-          alternatePhone: installAlternatePhone,
-          carNumber: installCarNumber,
-          chassisNumber: installChassisNumber,
-          installedAt: installDate,
-          remarks: installRemarks
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Installation completed successfully!');
-        setShowInstallModal(false);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to complete installation', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  const handleToggleSensitive = () => {
-    const val = !showSensitive;
-    setShowSensitive(val);
-    localStorage.setItem('showSensitive', val);
-  };
-
-  // Filtering and Sorting logic
-  const filteredDevices = devices.filter(dev => {
-    const query = search.toLowerCase();
-    const matchSearch = dev.id.includes(query) || dev.serialNumber.toLowerCase().includes(query);
-
-    const matchStatus = statusFilter === 'ALL' || dev.status === statusFilter;
-
-    const compId = getDeviceCompanyId(dev.id);
-    const matchCompany = companyFilter === 'ALL' || compId === companyFilter;
-
-    const agId = getDeviceAgentId(dev.id);
-    const matchAgent = agentFilter === 'ALL' || agId === agentFilter;
-
-    const pDate = getDevicePurchaseDate(dev.id);
-    let matchStart = true;
-    if (startDate) {
-      matchStart = pDate >= new Date(startDate);
-    }
-    let matchEnd = true;
-    if (endDate) {
-      const endLimit = new Date(endDate);
-      endLimit.setHours(23, 59, 59, 999);
-      matchEnd = pDate <= endLimit;
-    }
-
-    return matchSearch && matchStatus && matchCompany && matchAgent && matchStart && matchEnd;
-  });
-
-  const sortedDevices = [...filteredDevices].sort((a, b) => {
-    let valA, valB;
-    if (sortBy === 'id') {
-      valA = a.id;
-      valB = b.id;
-    } else if (sortBy === 'serialNumber') {
-      valA = a.serialNumber;
-      valB = b.serialNumber;
-    } else if (sortBy === 'purchasedAt') {
-      valA = getDevicePurchaseDate(a.id);
-      valB = getDevicePurchaseDate(b.id);
-    } else if (sortBy === 'purchasePrice') {
-      valA = a.purchasePrice;
-      valB = b.purchasePrice;
-    }
-
-    if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-    if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-    return 0;
-  });
-
-  const handleRequestSort = (field) => {
-    const isAsc = sortBy === field && sortOrder === 'asc';
-    setSortOrder(isAsc ? 'desc' : 'asc');
-    setSortBy(field);
-  };
-
-  // Export CSV devices
-  const handleExportCSV = () => {
-    const headers = ['IMEI', 'Serial Number', 'Supplier', 'Status', 'Current Owner', 'Purchase Cost', 'Sold price', 'Purchase Date', 'Installed Date'];
-    const rows = sortedDevices.map(d => [
-      d.id,
-      d.serialNumber,
-      getDeviceCompany(d.id),
-      d.status,
-      d.currentOwner,
-      d.purchasePrice,
-      getDeviceSalePrice(d.id),
-      formatDate(getDevicePurchaseDate(d.id)),
-      formatDate(getDeviceInstallDate(d.id))
-    ]);
-    exportToExcel(headers, rows, 'Devices_Inventory.csv');
-  };
-
-  // Lifecycle Mix Calculation
-  const totalCount = devices.length || 1;
-  const stockCount = devices.filter(d => d.status === 'IN_STOCK').length;
-  const partnerCount = devices.filter(d => d.status === 'SOLD_TO_AGENT').length;
-  const installedCount = devices.filter(d => d.status === 'INSTALLED').length;
-
-  const stockPct = ((stockCount / totalCount) * 100).toFixed(1);
-  const partnerPct = ((partnerCount / totalCount) * 100).toFixed(1);
-  const installedPct = ((installedCount / totalCount) * 100).toFixed(1);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {/* Page Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Inventory Management</p>
-          <h1 className="page-title">Devices Registry</h1>
-          <p className="card-subtitle">Complete registry tracking of all tracker devices, purchase records, sold channels, and installations.</p>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Dashboard
-        </button>
-      </div>
-
-      {alert.show && (
-        <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-          {alert.msg}
-        </div>
-      )}
-
-      {/* Lifecycle Mix bar */}
-      <section className="card-section" style={{ margin: 0 }}>
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '16px' }}>
-          <h2 className="card-title">Device Lifecycle Mix</h2>
-          <p className="card-subtitle">Real-time status mix of your tracker distribution pipeline.</p>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ display: 'flex', height: '20px', borderRadius: '10px', overflow: 'hidden', background: 'rgba(255,255,255,0.05)' }}>
-            <div style={{ width: `${stockPct}%`, background: 'var(--primary)', transition: 'width 0.4s ease' }} title={`In Stock: ${stockCount}`} />
-            <div style={{ width: `${partnerPct}%`, background: '#f59e0b', transition: 'width 0.4s ease' }} title={`Sold/Parceled: ${partnerCount}`} />
-            <div style={{ width: `${installedPct}%`, background: '#10b981', transition: 'width 0.4s ease' }} title={`Installed: ${installedCount}`} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', fontSize: '0.85rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--primary)' }} />
-              In Stock: <span style={{ fontWeight: 600 }}>{stockCount}</span> ({stockPct}%)
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b' }} />
-              Parceled to Partners: <span style={{ fontWeight: 600 }}>{partnerCount}</span> ({partnerPct}%)
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', background: '#10b981' }} />
-              Installed: <span style={{ fontWeight: 600 }}>{installedCount}</span> ({installedPct}%)
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Navigation Tabs */}
-      <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-        <button 
-          className={`btn ${activeTab === 'registry' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveTab('registry')}
-        >
-          Active inventory registry
-        </button>
-        <button 
-          className={`btn ${activeTab === 'deleted' ? 'btn-primary' : 'btn-secondary'}`}
-          onClick={() => setActiveTab('deleted')}
-        >
-          Deleted logs archive
-        </button>
-      </div>
-
-      {activeTab === 'registry' && (
-        <section className="card-section">
-          {/* Controls & Filters */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-              <div className="form-group" style={{ flexGrow: 1, minWidth: '200px' }}>
-                <label className="form-label">Search IMEI / Serial</label>
-                <input 
-                  placeholder="Enter IMEI or Serial Number..."
-                  className="form-input"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                />
-              </div>
-
-              <div className="form-group" style={{ minWidth: '150px' }}>
-                <label className="form-label">Status Filter</label>
-                <select className="form-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-                  <option value="ALL">All status</option>
-                  <option value="IN_STOCK">In Stock</option>
-                  <option value="SOLD_TO_AGENT">Parceled</option>
-                  <option value="INSTALLED">Installed</option>
-                </select>
-              </div>
-
-              <div className="form-group" style={{ minWidth: '150px' }}>
-                <label className="form-label">Supplier Company</label>
-                <select className="form-select" value={companyFilter} onChange={e => setCompanyFilter(e.target.value)}>
-                  <option value="ALL">All suppliers</option>
-                  {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-
-              <div className="form-group" style={{ minWidth: '150px' }}>
-                <label className="form-label">Partner Assignee</label>
-                <select className="form-select" value={agentFilter} onChange={e => setAgentFilter(e.target.value)}>
-                  <option value="ALL">All partners</option>
-                  {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', justifyContent: 'space-between', alignItems: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Purchased From</label>
-                  <input type="date" className="form-input" style={{ padding: '6px 12px' }} value={startDate} onChange={e => setStartDate(e.target.value)} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: '0.75rem' }}>Purchased To</label>
-                  <input type="date" className="form-input" style={{ padding: '6px 12px' }} value={endDate} onChange={e => setEndDate(e.target.value)} />
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <button type="button" className="btn btn-secondary" onClick={handleToggleSensitive}>
-                  {showSensitive ? 'Hide Purchase & Costs' : 'Show purchase, cost & profit'}
-                </button>
-                <button type="button" className="btn btn-secondary" onClick={() => setLayoutMode(layoutMode === 'table' ? 'cards' : 'table')}>
-                  {layoutMode === 'table' ? 'Cards view' : 'Table view'}
-                </button>
-                <button type="button" className="btn btn-secondary" onClick={handleExportCSV}>
-                  Export Excel
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {loading ? (
-            <p style={{ marginTop: '24px' }}>Loading active devices registry...</p>
-          ) : layoutMode === 'table' ? (
-            <div className="table-wrapper" style={{ marginTop: '24px' }}>
-              <table className="custom-table">
-                <thead>
-                  <tr>
-                    <th style={{ cursor: 'pointer' }} onClick={() => handleRequestSort('id')}>
-                      IMEI / Device ID {sortBy === 'id' && (sortOrder === 'asc' ? '▲' : '▼')}
-                    </th>
-                    <th style={{ cursor: 'pointer' }} onClick={() => handleRequestSort('serialNumber')}>
-                      Serial Number {sortBy === 'serialNumber' && (sortOrder === 'asc' ? '▲' : '▼')}
-                    </th>
-                    <th>Product Supplier</th>
-                    <th>Pipeline Status</th>
-                    <th>Current Assignee</th>
-                    {showSensitive && (
-                      <th style={{ cursor: 'pointer' }} onClick={() => handleRequestSort('purchasePrice')}>
-                        Purchase Cost {sortBy === 'purchasePrice' && (sortOrder === 'asc' ? '▲' : '▼')}
-                      </th>
-                    )}
-                    {showSensitive && <th>Sold Price</th>}
-                    <th style={{ cursor: 'pointer' }} onClick={() => handleRequestSort('purchasedAt')}>
-                      Purchase Date {sortBy === 'purchasedAt' && (sortOrder === 'asc' ? '▲' : '▼')}
-                    </th>
-                    <th>Install Date</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedDevices.length === 0 ? (
-                    <tr>
-                      <td colSpan={showSensitive ? 10 : 8} style={{ textAlign: 'center' }}>
-                        No inventory trackers match active filters
-                      </td>
-                    </tr>
-                  ) : (
-                    sortedDevices.map((dev) => {
-                      const pDate = getDevicePurchaseDate(dev.id);
-                      const iDate = getDeviceInstallDate(dev.id);
-                      const sItem = agentSaleItems.find(s => s.deviceId === dev.id);
-                      return (
-                        <tr key={dev.id}>
-                          <td style={{ fontWeight: 600 }}>{dev.id}</td>
-                          <td>{dev.serialNumber}</td>
-                          <td>{getDeviceCompany(dev.id)}</td>
-                          <td>
-                            <span className={`badge ${
-                              dev.status === 'IN_STOCK' ? 'badge-active' :
-                              dev.status === 'SOLD_TO_AGENT' ? 'badge-warning' : 'badge-disabled'
-                            }`} style={{
-                              background: dev.status === 'SOLD_TO_AGENT' ? '#f59e0b' : dev.status === 'INSTALLED' ? '#10b981' : ''
-                            }}>
-                              {dev.status === 'SOLD_TO_AGENT' ? 'PARCELED' : dev.status}
-                            </span>
-                          </td>
-                          <td>{dev.currentOwner || 'Company'}</td>
-                          {showSensitive && <td>{formatCurrency(dev.purchasePrice)}</td>}
-                          {showSensitive && <td>{dev.status !== 'IN_STOCK' ? formatCurrency(getDeviceSalePrice(dev.id)) : '—'}</td>}
-                          <td>{formatDate(pDate)}</td>
-                          <td>{iDate ? formatDate(iDate) : '—'}</td>
-                          <td>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              {dev.status === 'SOLD_TO_AGENT' && sItem && sItem.saleType === 'PARCELED' && hasPerm('INSTALL') && (
-                                <button 
-                                  onClick={() => handleOpenInstallModal(dev)}
-                                  className="btn btn-primary"
-                                  style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                                >
-                                  Complete Install
-                                </button>
-                              )}
-                              {hasPerm('COMPANY_DEVICE_DELETE') && (
-                                <button 
-                                  onClick={() => handleDeleteDevice(dev.id)}
-                                  className="btn btn-secondary"
-                                  style={{ padding: '4px 8px', fontSize: '0.8rem', color: 'var(--text-danger)' }}
-                                >
-                                  Delete
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            /* Cards View Mode */
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px', marginTop: '24px' }}>
-              {sortedDevices.length === 0 ? (
-                <p style={{ textAlign: 'center', gridColumn: '1/-1', color: 'var(--text-muted)' }}>
-                  No inventory trackers match active filters
-                </p>
-              ) : (
-                sortedDevices.map((dev) => {
-                  const pDate = getDevicePurchaseDate(dev.id);
-                  const iDate = getDeviceInstallDate(dev.id);
-                  const sItem = agentSaleItems.find(s => s.deviceId === dev.id);
-                  return (
-                    <div key={dev.id} className="form-card" style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                        <div>
-                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>IMEI</span>
-                          <h4 style={{ fontWeight: 700, fontSize: '1.05rem' }}>{dev.id}</h4>
-                        </div>
-                        <span className={`badge ${
-                          dev.status === 'IN_STOCK' ? 'badge-active' :
-                          dev.status === 'SOLD_TO_AGENT' ? 'badge-warning' : 'badge-disabled'
-                        }`} style={{
-                          background: dev.status === 'SOLD_TO_AGENT' ? '#f59e0b' : dev.status === 'INSTALLED' ? '#10b981' : ''
-                        }}>
-                          {dev.status === 'SOLD_TO_AGENT' ? 'PARCELED' : dev.status}
-                        </span>
-                      </div>
-
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.85rem' }}>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Serial Number:</span>
-                          <div>{dev.serialNumber}</div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Supplier:</span>
-                          <div>{getDeviceCompany(dev.id)}</div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Assignee:</span>
-                          <div>{dev.currentOwner || 'Company'}</div>
-                        </div>
-                        <div>
-                          <span style={{ color: 'var(--text-muted)' }}>Purchased At:</span>
-                          <div>{formatDate(pDate)}</div>
-                        </div>
-                      </div>
-
-                      {showSensitive && (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '0.85rem', borderTop: '1px solid var(--border)', paddingTop: '8px' }}>
-                          <div>
-                            <span style={{ color: 'var(--text-muted)' }}>Purchase Cost:</span>
-                            <div style={{ fontWeight: 600 }}>{formatCurrency(dev.purchasePrice)}</div>
-                          </div>
-                          <div>
-                            <span style={{ color: 'var(--text-muted)' }}>Sold price:</span>
-                            <div style={{ fontWeight: 600 }}>{dev.status !== 'IN_STOCK' ? formatCurrency(getDeviceSalePrice(dev.id)) : '—'}</div>
-                          </div>
-                        </div>
-                      )}
-
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border)', paddingTop: '10px', marginTop: 'auto' }}>
-                        {dev.status === 'SOLD_TO_AGENT' && sItem && sItem.saleType === 'PARCELED' && hasPerm('INSTALL') && (
-                          <button 
-                            onClick={() => handleOpenInstallModal(dev)}
-                            className="btn btn-primary"
-                            style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                          >
-                            Complete Install
-                          </button>
-                        )}
-                        {hasPerm('COMPANY_DEVICE_DELETE') && (
-                          <button 
-                            onClick={() => handleDeleteDevice(dev.id)}
-                            className="btn btn-secondary"
-                            style={{ padding: '4px 8px', fontSize: '0.8rem', color: 'var(--text-danger)' }}
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
-      {activeTab === 'deleted' && (
-        <section className="card-section">
-          <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-            <h2 className="card-title">Historic Soft-Deleted Archive Logs</h2>
-            <p className="card-subtitle">List of soft-deleted trackers. Restoring returns them to your active inventory database.</p>
-          </div>
-
-          {loading ? (
-            <p>Loading deleted logs...</p>
-          ) : (
-            <div className="table-wrapper">
-              <table className="custom-table">
-                <thead>
-                  <tr>
-                    <th>IMEI</th>
-                    <th>Serial Number</th>
-                    <th>Supplier</th>
-                    {showSensitive && <th>Purchase Price</th>}
-                    <th>Deleted Date</th>
-                    <th>Deleted By</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deletedDevices.length === 0 ? (
-                    <tr>
-                      <td colSpan={showSensitive ? 7 : 6} style={{ textAlign: 'center' }}>
-                        No deleted devices found in database archive
-                      </td>
-                    </tr>
-                  ) : (
-                    deletedDevices.map((d) => (
-                      <tr key={d.id}>
-                        <td style={{ fontWeight: 600 }}>{d.deviceId}</td>
-                        <td>{d.serialNumber}</td>
-                        <td>{getCompanyName(d.companyId)}</td>
-                        {showSensitive && <td>{formatCurrency(d.purchasePrice)}</td>}
-                        <td>{new Date(d.deletedAt).toLocaleString('en-IN')}</td>
-                        <td>{getUserName(d.deletedByUserId)}</td>
-                        <td>
-                          {hasPerm('COMPANY_DEVICE_ADD') && (
-                            <button 
-                              onClick={() => handleRestoreDevice(d.id)}
-                              className="btn btn-primary"
-                              style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                            >
-                              Restore
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Complete Install Modal */}
-      {showInstallModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <form onSubmit={handleCompleteInstallSubmit} className="form-card" style={{ padding: '30px', maxWidth: '500px', width: '90%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <h3 style={{ fontWeight: 600, fontSize: '1.2rem', borderBottom: '1px solid var(--border)', paddingBottom: '10px' }}>
-              Complete Vehicle Installation
-            </h3>
-            
-            <div className="form-group">
-              <label className="form-label">IMEI / Device ID</label>
-              <input className="form-input" disabled value={installDeviceId} />
-            </div>
-
-            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-              <div className="form-group">
-                <label className="form-label">Customer Name *</label>
-                <input required className="form-input" value={installCustomerName} onChange={e => setInstallCustomerName(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Customer Phone *</label>
-                <input required className="form-input" value={installCustomerPhone} onChange={e => setInstallCustomerPhone(e.target.value)} />
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-              <div className="form-group">
-                <label className="form-label">Car / Vehicle Number *</label>
-                <input required placeholder="e.g. DL-1CA-1234" className="form-input" value={installCarNumber} onChange={e => setInstallCarNumber(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Chassis Number *</label>
-                <input required placeholder="Last 5 or full chassis" className="form-input" value={installChassisNumber} onChange={e => setInstallChassisNumber(e.target.value)} />
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-              <div className="form-group">
-                <label className="form-label">Alternate Phone</label>
-                <input className="form-input" value={installAlternatePhone} onChange={e => setInstallAlternatePhone(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">Installation Date</label>
-                <input type="date" className="form-input" value={installDate} onChange={e => setInstallDate(e.target.value)} />
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Remarks / Notes</label>
-              <input className="form-input" placeholder="Installer name, location notes..." value={installRemarks} onChange={e => setInstallRemarks(e.target.value)} />
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '10px' }}>
-              <button type="button" onClick={() => setShowInstallModal(false)} className="btn btn-secondary">
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-primary">
-                Complete Install
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ==========================================
-// 7. INSTALLATIONS VIEW
-// ==========================================
-function InstallationsView({ hasPerm, setPath, user }) {
-  const [installations, setInstallations] = useState([]);
-  const [devices, setDevices] = useState([]);
-  const [agents, setAgents] = useState([]);
-  const [agentSaleItems, setAgentSaleItems] = useState([]);
-  const [actorUsers, setActorUsers] = useState([]);
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  // Stats
-  const [stats, setStats] = useState({ installed: 0, pending: 0, thisMonth: 0 });
-
-  // Wizard States
-  const [activeStep, setActiveStep] = useState(1); // 1: Pick Device, 2: Complete details
-  const [wizardAgentFilter, setWizardAgentFilter] = useState('');
-  const [wizardCompanyFilter, setWizardCompanyFilter] = useState('');
-  const [selectedSaleItem, setSelectedSaleItem] = useState(null);
-  const [wizardPage, setWizardPage] = useState(1);
-
-  // Wizard Step 2 inputs
-  const [carNumber, setCarNumber] = useState('');
-  const [chassisNumber, setChassisNumber] = useState('');
-  const [installedAt, setInstalledAt] = useState(new Date().toISOString().split('T')[0]);
-  const [alternatePhone, setAlternatePhone] = useState('');
-  const [remarks, setRemarks] = useState('');
-
-  // Registry Filters
-  const [search, setSearch] = useState('');
-  const [agentFilter, setAgentFilter] = useState('');
-  const [installedByFilter, setInstalledByFilter] = useState('');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-  
-  // Registry Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
-
-  // Detail Modal
-  const [selectedDetailInst, setSelectedDetailInst] = useState(null);
-
-  const [alert, setAlert] = useState({ show: false, msg: '', type: '' });
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_URL}/installations`, { headers: getHeaders() });
-      if (res.ok) {
-        const data = await res.json();
-        setInstallations(data.installations || []);
-        setDevices(data.devices || []);
-        setAgents(data.agents || []);
-        setAgentSaleItems(data.agentSaleItems || []);
-        setActorUsers(data.actorUsers || []);
-        setCompanies(data.companies || []);
-
-        // Compute Stats
-        const instCount = data.installations.length;
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
         
-        // Pending: SOLD_TO_AGENT and saleType === 'INSTALLED'
-        const pendingCount = data.agentSaleItems.filter(s => {
-          const d = data.devices.find(dev => dev.id === s.deviceId);
-          return d && d.status === 'SOLD_TO_AGENT' && s.saleType === 'INSTALLED';
-        }).length;
-
-        // This Month
-        const now = new Date();
-        const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const thisMonthCount = data.installations.filter(inst => new Date(inst.installedAt) >= firstOfMonth).length;
-
-        setStats({ installed: instCount, pending: pendingCount, thisMonth: thisMonthCount });
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const triggerAlert = (msg, type = 'success') => {
-    setAlert({ show: true, msg, type });
-    setTimeout(() => setAlert({ show: false, msg: '', type: '' }), 5000);
-  };
-
-  const getAgentName = (agId) => {
-    const ag = agents.find(a => a.id === agId);
-    return ag ? ag.name : 'Direct / Unknown';
-  };
-
-  const getUserName = (userId) => {
-    const u = actorUsers.find(ac => ac.id === userId);
-    return u ? u.name : 'Unknown User';
-  };
-
-  const getCompanyName = (compId) => {
-    const c = companies.find(comp => comp.id === compId);
-    return c ? c.name : '';
-  };
-
-  // Filter pending sales for Step 1
-  const pendingSoldSales = agentSaleItems.filter(s => {
-    const dev = devices.find(d => d.id === s.deviceId);
-    if (!dev || dev.status !== 'SOLD_TO_AGENT') return false;
-    if (s.saleType !== 'INSTALLED') return false; // Parceled are completed in inventory
-
-    if (wizardAgentFilter && s.agentId !== wizardAgentFilter) return false;
-    if (wizardCompanyFilter && s.companyId !== wizardCompanyFilter) return false;
-
-    return true;
-  });
-
-  // Paginated wizard devices
-  const wizardPageSize = 5;
-  const totalWizardPages = Math.ceil(pendingSoldSales.length / wizardPageSize) || 1;
-  const paginatedWizardSales = pendingSoldSales.slice(
-    (wizardPage - 1) * wizardPageSize,
-    wizardPage * wizardPageSize
-  );
-
-  const handleStep1Continue = () => {
-    if (!selectedSaleItem) {
-      triggerAlert('Please select a device to install', 'danger');
-      return;
-    }
-    // Get chassis/car pre-fills if already in sale record
-    setCarNumber(selectedSaleItem.carNumber || '');
-    setChassisNumber(selectedSaleItem.chassisNumber || '');
-    setActiveStep(2);
-  };
-
-  const handleCompleteInstallation = async (e) => {
-    e.preventDefault();
-    if (!selectedSaleItem) return;
-
-    try {
-      const res = await fetch(`${API_URL}/installations`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          deviceId: selectedSaleItem.deviceId,
-          customerName: selectedSaleItem.customerName,
-          customerPhone: selectedSaleItem.customerPhone,
-          alternatePhone,
-          carNumber,
-          chassisNumber,
-          installedAt,
-          remarks
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('Installation completed successfully!');
-        setSelectedSaleItem(null);
-        setCarNumber('');
-        setChassisNumber('');
-        setAlternatePhone('');
-        setRemarks('');
-        setActiveStep(1);
-        setWizardPage(1);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to complete installation', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  // Registry filter
-  const filteredInstallations = installations.filter(inst => {
-    const matchesAgent = !agentFilter || inst.agentId === agentFilter;
-    const matchesUser = !installedByFilter || inst.userId === installedByFilter;
-
-    let matchesDate = true;
-    if (fromDate) {
-      const fDate = new Date(fromDate);
-      fDate.setHours(0, 0, 0, 0);
-      matchesDate = matchesDate && new Date(inst.installedAt) >= fDate;
-    }
-    if (toDate) {
-      const tDate = new Date(toDate);
-      tDate.setHours(23, 59, 59, 999);
-      matchesDate = matchesDate && new Date(inst.installedAt) <= tDate;
-    }
-
-    const query = search.toLowerCase();
-    const dev = devices.find(d => d.id === inst.deviceId) || {};
-    const matchesSearch = !search ||
-      inst.deviceId.includes(query) ||
-      inst.customerName.toLowerCase().includes(query) ||
-      inst.customerPhone.includes(query) ||
-      inst.carNumber.toLowerCase().includes(query) ||
-      inst.chassisNumber.toLowerCase().includes(query) ||
-      getAgentName(inst.agentId).toLowerCase().includes(query) ||
-      getUserName(inst.userId).toLowerCase().includes(query) ||
-      (dev.serialNumber && dev.serialNumber.toLowerCase().includes(query));
-
-    return matchesAgent && matchesUser && matchesDate && matchesSearch;
-  });
-
-  // Registry Pagination
-  const totalRegistryPages = Math.ceil(filteredInstallations.length / itemsPerPage) || 1;
-  const paginatedRegistry = filteredInstallations.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
-
-  const handleExportRegistry = () => {
-    const headers = ['Device IMEI', 'Serial Number', 'Customer Name', 'Customer Phone', 'Partner', 'Car Number', 'Chassis Number', 'Installed Date', 'Installed By'];
-    const rows = filteredInstallations.map(inst => {
-      const dev = devices.find(d => d.id === inst.deviceId) || {};
-      return [
-        inst.deviceId,
-        dev.serialNumber || '',
-        inst.customerName,
-        inst.customerPhone,
-        getAgentName(inst.agentId),
-        inst.carNumber,
-        inst.chassisNumber,
-        formatDate(inst.installedAt),
-        getUserName(inst.userId)
-      ];
-    });
-    exportToExcel(headers, rows, 'Installation_Registry.csv');
-  };
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {/* Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Customer Installations</p>
-          <h1 className="page-title">Installations</h1>
-          <p className="card-subtitle">Mark devices as installed after partner sale. Parceled devices are completed in Device inventory.</p>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Dashboard
-        </button>
-      </div>
-
-      {alert.show && (
-        <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-          {alert.msg}
-        </div>
-      )}
-
-      {/* Stats Cards */}
-      <div className="stats-grid" style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <div className="stat-card">
-          <span className="stat-label">INSTALLED</span>
-          <span className="stat-value">{stats.installed}</span>
-          <span className="stat-desc">Completed installations</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">PENDING</span>
-          <span className="stat-value">{stats.pending}</span>
-          <span className="stat-desc">Sold to partner, awaiting install</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-label">THIS MONTH</span>
-          <span className="stat-value">{stats.thisMonth}</span>
-          <span className="stat-desc">New installations</span>
-        </div>
-      </div>
-
-      {/* Complete pending installation (Wizard) */}
-      {hasPerm('INSTALL') && (
-        <div className="card-section">
-          <div className="card-title-group">
-            <h2 className="card-title">Complete pending installation</h2>
-            <p className="card-subtitle">Devices sold to a partner with customer details — two steps to mark installed.</p>
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Inventory Management</p>
+            <h1 className="text-4xl font-semibold mt-1">Device Inventory</h1>
+            <p className="text-sm text-slate-500 mt-1">{totalCount} total tracked devices · {inStockCount} in stock · {withPartnerCount} with partner · {installedCount} installed</p>
           </div>
-
-          <div style={{ marginTop: '24px' }}>
-            {/* Wizard Steps indicator */}
-            <div style={{ display: 'flex', gap: '16px', marginBottom: '24px', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-              <span style={{ fontWeight: activeStep === 1 ? '700' : '400', color: activeStep === 1 ? 'var(--text)' : 'var(--text-muted)' }}>
-                1. PICK DEVICE
-              </span>
-              <span style={{ color: 'var(--text-muted)' }}>&rarr;</span>
-              <span style={{ fontWeight: activeStep === 2 ? '700' : '400', color: activeStep === 2 ? 'var(--text)' : 'var(--text-muted)' }}>
-                2. COMPLETE
-              </span>
-            </div>
-
-            {activeStep === 1 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', gap: '16px' }}>
-                  <select 
-                    className="form-select"
-                    value={wizardAgentFilter}
-                    onChange={e => { setWizardAgentFilter(e.target.value); setWizardPage(1); setSelectedSaleItem(null); }}
-                  >
-                    <option value="">Filter by partner (All)</option>
-                    {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
-                  <select 
-                    className="form-select"
-                    value={wizardCompanyFilter}
-                    onChange={e => { setWizardCompanyFilter(e.target.value); setWizardPage(1); setSelectedSaleItem(null); }}
-                  >
-                    <option value="">Company filter (optional)</option>
-                    {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-                </div>
-
-                <div className="table-wrapper">
-                  <table className="custom-table">
-                    <thead>
-                      <tr>
-                        <th>Device IMEI / Serial</th>
-                        <th>Customer / Phone</th>
-                        <th>Partner</th>
-                        <th>Select</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {pendingSoldSales.length === 0 ? (
-                        <tr>
-                          <td colSpan="4" style={{ textAlign: 'center' }}>No pending devices matching filters</td>
-                        </tr>
-                      ) : (
-                        paginatedWizardSales.map((sale, idx) => {
-                          const dev = devices.find(d => d.id === sale.deviceId) || {};
-                          const isSelected = selectedSaleItem && selectedSaleItem.id === sale.id;
-                          return (
-                            <tr 
-                              key={idx} 
-                              onClick={() => setSelectedSaleItem(sale)}
-                              style={{ 
-                                cursor: 'pointer', 
-                                background: isSelected ? 'rgba(var(--accent-rgb), 0.1)' : 'transparent' 
-                              }}
-                            >
-                              <td>
-                                <div style={{ fontWeight: 600 }}>{sale.deviceId}</div>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{dev.serialNumber}</div>
-                              </td>
-                              <td>
-                                <div>{sale.customerName}</div>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{sale.customerPhone}</div>
-                              </td>
-                              <td>{getAgentName(sale.agentId)}</td>
-                              <td>
-                                <input 
-                                  type="radio" 
-                                  checked={isSelected}
-                                  onChange={() => setSelectedSaleItem(sale)}
-                                />
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center', marginTop: '12px' }}>
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                    Showing {pendingSoldSales.length === 0 ? 0 : (wizardPage - 1) * wizardPageSize + 1}–
-                    {Math.min(wizardPage * wizardPageSize, pendingSoldSales.length)} of {pendingSoldSales.length} devices
-                  </span>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button 
-                      className="btn btn-secondary" 
-                      disabled={wizardPage === 1}
-                      onClick={() => setWizardPage(wizardPage - 1)}
-                    >
-                      Prev
-                    </button>
-                    <span style={{ alignSelf: 'center', fontSize: '0.9rem' }}>Page {wizardPage} / {totalWizardPages}</span>
-                    <button 
-                      className="btn btn-secondary" 
-                      disabled={wizardPage === totalWizardPages}
-                      onClick={() => setWizardPage(wizardPage + 1)}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-
-                <button 
-                  onClick={handleStep1Continue} 
-                  className="btn btn-primary"
-                  style={{ alignSelf: 'flex-end', marginTop: '16px' }}
-                >
-                  Continue
-                </button>
-              </div>
-            ) : (
-              <form onSubmit={handleCompleteInstallation} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div style={{ padding: '16px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                  <h4 style={{ fontWeight: 600 }}>Selected Device Details</h4>
-                  <p style={{ fontSize: '0.85rem', marginTop: '8px' }}>IMEI: {selectedSaleItem.deviceId}</p>
-                  <p style={{ fontSize: '0.85rem' }}>Customer: {selectedSaleItem.customerName} ({selectedSaleItem.customerPhone})</p>
-                  <p style={{ fontSize: '0.85rem' }}>Partner: {getAgentName(selectedSaleItem.agentId)}</p>
-                </div>
-
-                <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                  <div className="form-group">
-                    <label className="form-label">Car number *</label>
-                    <input 
-                      required 
-                      className="form-input"
-                      value={carNumber}
-                      onChange={e => setCarNumber(e.target.value)}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Chassis number *</label>
-                    <input 
-                      required 
-                      className="form-input"
-                      value={chassisNumber}
-                      onChange={e => setChassisNumber(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gap: '16px', gridTemplateColumns: '1fr 1fr' }}>
-                  <div className="form-group">
-                    <label className="form-label">Installation Date</label>
-                    <input 
-                      type="date"
-                      className="form-input"
-                      value={installedAt}
-                      onChange={e => setInstalledAt(e.target.value)}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Alternate Phone</label>
-                    <input 
-                      className="form-input"
-                      value={alternatePhone}
-                      onChange={e => setAlternatePhone(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Remarks</label>
-                  <input 
-                    className="form-input"
-                    value={remarks}
-                    onChange={e => setRemarks(e.target.value)}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'between', marginTop: '24px' }}>
-                  <button 
-                    type="button" 
-                    className="btn btn-secondary"
-                    onClick={() => setActiveStep(1)}
-                  >
-                    Back to Pick Device
-                  </button>
-                  <button type="submit" className="btn btn-primary">
-                    Complete Installation
-                  </button>
-                </div>
-              </form>
-            )}
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={toggleTheme}
+              className="rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800 transition"
+            >
+              {isDark ? 'Switch to Day Mode' : 'Switch to Night Mode'}
+            </button>
+            <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Dashboard
+            </button>
           </div>
         </div>
-      )}
 
-      {/* Registry */}
-      <section className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Installation registry</h2>
-          <p className="card-subtitle">Filter by date range, partner, installed-by user, search, and export to Excel.</p>
+        {/* View Toggles & Status filters */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex flex-wrap gap-2">
+            {['ALL', 'IN_STOCK', 'SOLD_TO_AGENT', 'INSTALLED'].map(st => (
+              <button 
+                key={st}
+                onClick={() => { setFilterStatus(st); setPage(1); }}
+                className={`rounded-full px-5 py-2 text-xs font-bold uppercase tracking-wider transition ${
+                  filterStatus === st 
+                    ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' 
+                    : 'bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`}
+              >
+                {st === 'ALL' ? 'All status' : st === 'IN_STOCK' ? 'In Stock' : st === 'SOLD_TO_AGENT' ? 'With Partner' : 'Installed'}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setViewMode('cards')}
+              className={`rounded-full px-4 py-2 text-xs font-semibold ${viewMode === 'cards' ? 'bg-slate-200 text-slate-950 dark:bg-slate-800 dark:text-white' : 'text-slate-400'}`}
+            >
+              Cards Grid
+            </button>
+            <button 
+              onClick={() => setViewMode('table')}
+              className={`rounded-full px-4 py-2 text-xs font-semibold ${viewMode === 'table' ? 'bg-slate-200 text-slate-950 dark:bg-slate-800 dark:text-white' : 'text-slate-400'}`}
+            >
+              Table View
+            </button>
+          </div>
         </div>
 
-        {/* Filters bar */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginTop: '20px', alignItems: 'flex-end' }}>
-          <div className="form-group" style={{ flexGrow: 1, minWidth: '200px' }}>
-            <label className="form-label">Search installations</label>
+        {/* Search Filter Panel */}
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 grid gap-4 sm:grid-cols-2 md:grid-cols-4">
+          <div className="space-y-1">
+            <label className="text-xs text-slate-400 font-semibold block">Search Query</label>
             <input 
-              placeholder="Search IMEI, customer, car, partner, installer..."
-              className="form-input"
+              placeholder="IMEI, serial, customer..."
               value={search}
-              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+              onChange={e => { setSearch(e.target.value); setPage(1); }}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none focus:border-slate-400"
             />
           </div>
-          <div className="form-group" style={{ minWidth: '150px' }}>
-            <label className="form-label">Partner</label>
+          
+          <div className="space-y-1">
+            <label className="text-xs text-slate-400 font-semibold block">Supplier Company</label>
             <select 
-              className="form-select"
-              value={agentFilter}
-              onChange={e => { setAgentFilter(e.target.value); setCurrentPage(1); }}
+              value={filterCompany}
+              onChange={e => { setFilterCompany(e.target.value); setPage(1); }}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none"
             >
-              <option value="">All partners</option>
+              <option value="">All Companies</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-slate-400 font-semibold block">Partner Dealer</label>
+            <select 
+              value={filterAgent}
+              onChange={e => { setFilterAgent(e.target.value); setPage(1); }}
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 px-4 py-2 text-sm outline-none"
+            >
+              <option value="">All Partners</option>
               {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </div>
-          <div className="form-group" style={{ minWidth: '150px' }}>
-            <label className="form-label">Installed by</label>
-            <select 
-              className="form-select"
-              value={installedByFilter}
-              onChange={e => { setInstalledByFilter(e.target.value); setCurrentPage(1); }}
+
+          <div className="flex items-end">
+            <button 
+              onClick={() => { setSearch(''); setFilterStatus('ALL'); setFilterCompany(''); setFilterAgent(''); setPage(1); }}
+              className="w-full rounded-xl border border-slate-350 bg-slate-100 hover:bg-slate-200 dark:border-slate-800 dark:bg-slate-850 py-2.5 text-xs font-semibold tracking-wider transition"
             >
-              <option value="">All users</option>
-              {actorUsers.map(u => <option key={u.id} value={u.id}>{u.name} ({u.mobile})</option>)}
-            </select>
+              Reset Filters
+            </button>
           </div>
-          <div className="form-group" style={{ minWidth: '120px' }}>
-            <label className="form-label">From date</label>
-            <input 
-              type="date"
-              className="form-input"
-              value={fromDate}
-              onChange={e => { setFromDate(e.target.value); setCurrentPage(1); }}
-            />
-          </div>
-          <div className="form-group" style={{ minWidth: '120px' }}>
-            <label className="form-label">To date</label>
-            <input 
-              type="date"
-              className="form-input"
-              value={toDate}
-              onChange={e => { setToDate(e.target.value); setCurrentPage(1); }}
-            />
-          </div>
-          <button onClick={handleExportRegistry} className="btn btn-secondary">
-            Export Excel
-          </button>
         </div>
 
-        {loading ? (
-          <p style={{ marginTop: '20px' }}>Loading installations registry...</p>
+        {/* View Mode content */}
+        {viewMode === 'cards' ? (
+          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+            {paged.map(d => {
+              const pi = purchaseItems.find(p => p.deviceId === d.id);
+              const si = agentSaleItems.find(p => p.deviceId === d.id);
+              const comp = companies.find(c => c.id === pi?.companyId);
+              const agent = agents.find(c => c.id === si?.agentId);
+              return (
+                <div 
+                  key={d.id} 
+                  onClick={() => setSelectedDevice(d)}
+                  className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm hover:border-slate-400 dark:border-slate-800 dark:bg-slate-900/70 transition cursor-pointer hover:shadow-md"
+                >
+                  <div className="flex items-center gap-4 border-b border-slate-100 dark:border-slate-800 pb-3 mb-3">
+                    <div className="h-16 w-16 overflow-hidden rounded-2xl bg-slate-100 dark:bg-slate-950 flex-shrink-0">
+                      {d.image ? (
+                        <img src={d.image} alt={d.id} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="h-full w-full flex items-center justify-center text-slate-300 font-bold text-xs">NO IMG</div>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.28em] text-slate-400 font-bold font-mono">{d.id}</p>
+                      <h2 className="text-lg font-semibold text-slate-950 dark:text-white leading-tight mt-1">{d.serialNumber || '—'}</h2>
+                      <p className="text-xs text-slate-500 font-medium">Owner: {d.currentOwner || 'Company'}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 text-xs text-slate-600 dark:text-slate-400">
+                    <div className="flex justify-between">
+                      <span>Status:</span>
+                      <span className={`font-semibold uppercase ${
+                        d.status === 'IN_STOCK' ? 'text-green-600' : d.status === 'SOLD_TO_AGENT' ? 'text-amber-600' : 'text-blue-600'
+                      }`}>{d.status.replace(/_/g, ' ')}</span>
+                    </div>
+                    {comp && (
+                      <div className="flex justify-between">
+                        <span>Supplier:</span>
+                        <span className="font-semibold text-slate-900 dark:text-white">{comp.name}</span>
+                      </div>
+                    )}
+                    {agent && (
+                      <div className="flex justify-between">
+                        <span>Dealer:</span>
+                        <span className="font-semibold text-slate-900 dark:text-white">{agent.name}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-slate-100 dark:border-slate-850 pt-2 mt-2 font-mono">
+                      <span>Cost: {fmt(d.purchasePrice)}</span>
+                      {si && <span>Sale: {fmt(si.sellingPrice)}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         ) : (
-          <div style={{ marginTop: '24px' }}>
-            <div className="table-wrapper">
-              <table className="custom-table">
-                <thead>
-                  <tr>
-                    <th>Device</th>
-                    <th>Customer</th>
-                    <th>Partner</th>
-                    <th>Car</th>
-                    <th>Installed</th>
-                    <th>Installed by</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredInstallations.length === 0 ? (
-                    <tr>
-                      <td colSpan="7" style={{ textAlign: 'center' }}>No installations found matching filters</td>
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                <tr>
+                  <th className="px-6 py-4">Device ID (IMEI)</th>
+                  <th className="px-6 py-4">Serial</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4">Company</th>
+                  <th className="px-6 py-4">Dealer</th>
+                  <th className="px-6 py-4">Owner</th>
+                  <th className="px-6 py-4">Cost Price</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {paged.map(d => {
+                  const pi = purchaseItems.find(p => p.deviceId === d.id);
+                  const si = agentSaleItems.find(p => p.deviceId === d.id);
+                  const comp = companies.find(c => c.id === pi?.companyId);
+                  const agent = agents.find(c => c.id === si?.agentId);
+                  return (
+                    <tr 
+                      key={d.id} 
+                      onClick={() => setSelectedDevice(d)}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition cursor-pointer font-medium"
+                    >
+                      <td className="px-6 py-4 font-mono text-xs font-semibold">{d.id}</td>
+                      <td className="px-6 py-4">{d.serialNumber}</td>
+                      <td className="px-6 py-4 uppercase text-xs font-semibold tracking-wider">{d.status.replace(/_/g, ' ')}</td>
+                      <td className="px-6 py-4">{comp?.name || '—'}</td>
+                      <td className="px-6 py-4">{agent?.name || '—'}</td>
+                      <td className="px-6 py-4 text-xs font-semibold">{d.currentOwner || 'Company'}</td>
+                      <td className="px-6 py-4">{fmt(d.purchasePrice)}</td>
                     </tr>
-                  ) : (
-                    paginatedRegistry.map((inst, index) => {
-                      const dev = devices.find(d => d.id === inst.deviceId) || {};
-                      return (
-                        <tr key={index}>
-                          <td>
-                            <div style={{ fontWeight: 600 }}>{inst.deviceId}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{dev.serialNumber}</div>
-                          </td>
-                          <td>
-                            <div>{inst.customerName}</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{inst.customerPhone}</div>
-                          </td>
-                          <td>{getAgentName(inst.agentId)}</td>
-                          <td>{inst.carNumber}</td>
-                          <td>{formatDate(inst.installedAt)}</td>
-                          <td>{getUserName(inst.userId)}</td>
-                          <td>
-                            <button 
-                              className="btn btn-secondary" 
-                              style={{ padding: '4px 8px', fontSize: '0.8rem' }}
-                              onClick={() => setSelectedDetailInst(inst)}
-                            >
-                              More
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-            {/* Pagination registry */}
-            <div style={{ display: 'flex', justifyContent: 'between', alignItems: 'center', marginTop: '16px' }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Showing {filteredInstallations.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1}–
-                  {Math.min(currentPage * itemsPerPage, filteredInstallations.length)} of {filteredInstallations.length} installations
-                </span>
-                <select 
-                  className="form-select" 
-                  style={{ padding: '2px 8px', fontSize: '0.8rem' }}
-                  value={itemsPerPage}
-                  onChange={e => { setItemsPerPage(Number(e.target.value)); setCurrentPage(1); }}
-                >
-                  <option value="10">10 per page</option>
-                  <option value="20">20 per page</option>
-                  <option value="50">50 per page</option>
-                </select>
+        {/* Pagination controls */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between text-sm text-slate-500 font-semibold pt-4">
+            <span>Showing {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} of {filtered.length} devices</span>
+            <div className="flex gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                className="rounded-full border border-slate-300 px-4 py-2 text-xs hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 disabled:opacity-40 transition">Prev</button>
+              <span className="px-3 py-2">Page {page} of {totalPages}</span>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                className="rounded-full border border-slate-300 px-4 py-2 text-xs hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 disabled:opacity-40 transition">Next</button>
+            </div>
+          </div>
+        )}
+
+        {/* Device Detail Modal */}
+        {selectedDevice && (
+          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-xl p-6 relative">
+              <button 
+                onClick={() => setSelectedDevice(null)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 dark:hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+              
+              <h3 className="text-xl font-semibold border-b border-slate-100 dark:border-slate-800 pb-3 mb-4">Device Technical Registry</h3>
+              
+              <div className="grid gap-6 sm:grid-cols-2 text-sm">
+                <div className="space-y-3">
+                  <div>
+                    <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Device ID (IMEI)</span>
+                    <span className="font-mono font-semibold text-slate-950 dark:text-white">{selectedDevice.id}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Serial Number</span>
+                    <span className="font-semibold text-slate-950 dark:text-white">{selectedDevice.serialNumber || '—'}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Status</span>
+                    <span className="uppercase font-semibold text-xs tracking-wider text-slate-900 dark:text-white">{selectedDevice.status}</span>
+                  </div>
+                  <div>
+                    <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Current Owner / Location</span>
+                    <span className="font-semibold text-slate-900 dark:text-white">{selectedDevice.currentOwner || 'Company Stock'}</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Supplier Purchase Price</span>
+                    <span className="font-semibold text-slate-900 dark:text-white font-mono">{fmt(selectedDevice.purchasePrice)}</span>
+                  </div>
+                  
+                  {/* Lookup and display purchase detail */}
+                  {(() => {
+                    const pi = purchaseItems.find(p => p.deviceId === selectedDevice.id);
+                    const comp = companies.find(c => c.id === pi?.companyId);
+                    if (!pi) return null;
+                    return (
+                      <>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Supplier Company</span>
+                          <span className="font-semibold text-slate-900 dark:text-white">{comp?.name || '—'}</span>
+                        </div>
+                        <div>
+                          <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Purchased Date</span>
+                          <span className="font-semibold text-slate-900 dark:text-white text-xs font-mono">{fmtDate(pi.purchasedAt)}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
+
+              {/* Lookup and display agent sale details if sold */}
+              {(() => {
+                const si = agentSaleItems.find(s => s.deviceId === selectedDevice.id);
+                const agentObj = agents.find(a => a.id === si?.agentId);
+                const installObj = installations.find(i => i.deviceId === selectedDevice.id);
+                if (!si) return null;
+                return (
+                  <div className="mt-6 border-t border-slate-100 dark:border-slate-800 pt-4 space-y-4">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Partner Sale & Customer Details</h4>
+                    <div className="grid gap-4 sm:grid-cols-2 text-sm">
+                      <div>
+                        <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Dealer Partner</span>
+                        <span className="font-semibold text-slate-900 dark:text-white">{agentObj?.name || '—'} (Shop: {agentObj?.shopName})</span>
+                      </div>
+                      <div>
+                        <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Dealer Selling Price</span>
+                        <span className="font-semibold text-slate-900 dark:text-white font-mono">{fmt(si.sellingPrice)}</span>
+                      </div>
+                      {si.customerName && (
+                        <div>
+                          <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Customer Name</span>
+                          <span className="font-semibold text-slate-900 dark:text-white">{si.customerName} (Phone: {si.customerPhone})</span>
+                        </div>
+                      )}
+                      {si.carNumber && (
+                        <div>
+                          <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Car / Chassis Number</span>
+                          <span className="font-semibold text-slate-900 dark:text-white">Car: {si.carNumber} <br/>Chassis: {si.chassisNumber}</span>
+                        </div>
+                      )}
+                      {installObj && (
+                        <div>
+                          <span className="text-xs text-slate-400 block font-semibold uppercase tracking-wider">Installation Registry Date</span>
+                          <span className="font-semibold text-slate-900 dark:text-white text-xs font-mono">{fmtDate(installObj.installedAt)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="mt-8 flex justify-between gap-3 border-t border-slate-100 dark:border-slate-800 pt-4">
+                {user?.role === 'ADMIN' && selectedDevice.status === 'IN_STOCK' && (
+                  <button 
+                    onClick={() => handleDeleteDevice(selectedDevice.id)}
+                    className="rounded-full border border-red-200 bg-red-50 px-5 py-2.5 text-xs font-semibold text-red-650 hover:bg-red-100 transition dark:border-red-950 dark:bg-red-950/20 dark:text-red-400 dark:hover:bg-red-950/40"
+                  >
+                    Delete Device
+                  </button>
+                )}
                 <button 
-                  className="btn btn-secondary" 
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage(currentPage - 1)}
+                  onClick={() => setSelectedDevice(null)}
+                  className="rounded-full bg-slate-950 px-5 py-2.5 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition ml-auto"
                 >
-                  Prev
-                </button>
-                <span style={{ alignSelf: 'center', fontSize: '0.9rem' }}>Page {currentPage} / {totalRegistryPages}</span>
-                <button 
-                  className="btn btn-secondary" 
-                  disabled={currentPage === totalRegistryPages}
-                  onClick={() => setCurrentPage(currentPage + 1)}
-                >
-                  Next
+                  Close Detail
                 </button>
               </div>
             </div>
           </div>
         )}
-      </section>
-
-      {/* More Details Modal */}
-      {selectedDetailInst && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', 
-          display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000
-        }}>
-          <div className="card-section" style={{ maxWidth: '500px', width: '90%', background: 'var(--bg-card)', border: '1px solid var(--border)' }}>
-            <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
-              <h3 className="card-title">Installation Details</h3>
-            </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px', fontSize: '0.9rem' }}>
-              <p><strong>Device IMEI:</strong> {selectedDetailInst.deviceId}</p>
-              <p><strong>Customer Name:</strong> {selectedDetailInst.customerName}</p>
-              <p><strong>Customer Phone:</strong> {selectedDetailInst.customerPhone}</p>
-              {selectedDetailInst.alternatePhone && <p><strong>Alternate Phone:</strong> {selectedDetailInst.alternatePhone}</p>}
-              <p><strong>Car Number:</strong> {selectedDetailInst.carNumber}</p>
-              <p><strong>Chassis Number:</strong> {selectedDetailInst.chassisNumber}</p>
-              <p><strong>Company:</strong> {getCompanyName(selectedDetailInst.companyId)}</p>
-              <p><strong>Installed Date:</strong> {new Date(selectedDetailInst.installedAt).toLocaleString('en-IN')}</p>
-              <p><strong>Installed By:</strong> {getUserName(selectedDetailInst.userId)}</p>
-              {selectedDetailInst.remarks && <p><strong>Remarks:</strong> {selectedDetailInst.remarks}</p>}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '24px' }}>
-              <button onClick={() => setSelectedDetailInst(null)} className="btn btn-primary">
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
+    </main>
   );
 }
 
-// ==========================================
-// 8. SECURITY / USER ACCESS CONTROL
-// ==========================================
-function UsersView({ hasPerm, setPath, isSetupMode = false }) {
-  const [users, setUsers] = useState([]);
+// ─────────────────────────────────────────────────────────────
+// INSTALLATIONS PAGE
+// ─────────────────────────────────────────────────────────────
+
+function InstallationsPage({ hasPerm, nav, showToast, fmt, fmtDate }) {
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [firstTimeSetupAllowed, setFirstTimeSetupAllowed] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filterAgent, setFilterAgent] = useState('');
 
-  // Create User Form
-  const [name, setName] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState('USER');
-  const [selectedPermissions, setSelectedPermissions] = useState([]);
+  // Complete pending installations stepper states
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [selectedDeviceSearch, setSelectedDeviceSearch] = useState('');
+  const [selectedDevice, setSelectedDevice] = useState(null); // the selected device object
+  
+  // Client forms
+  const [custName, setCustName] = useState('');
+  const [custPhone, setCustPhone] = useState('');
+  const [carNumber, setCarNumber] = useState('');
+  const [chassisNumber, setChassisNumber] = useState('');
+  const [installedDate, setInstalledDate] = useState(today());
 
-  // Inline edit state
-  const [editUserId, setEditUserId] = useState(null);
-  const [editRole, setEditRole] = useState('');
+  const [devDropdown, setDevDropdown] = useState([]);
+
+  // Pagination for pending list
+  const [pendingPage, setPendingPage] = useState(1);
+  const PENDING_PER_PAGE = 6;
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/installations`, { headers: getHeaders() });
+      if (res.ok) setData(await res.json());
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  if (loading) return <Loader />;
+
+  const installations = data?.installations || [];
+  const devices = data?.devices || [];
+  const agents = data?.agents || [];
+  const agentSaleItems = data?.agentSaleItems || [];
+
+  // Filter device candidates for complete installation (sold to agent but not installed)
+  const pendingCandidates = devices.filter(d => {
+    if (d.status !== 'SOLD_TO_AGENT') return false;
+    const saleItem = agentSaleItems.find(s => s.deviceId === d.id);
+    if (!saleItem) return false;
+    
+    const matchAgent = !selectedAgentId || saleItem.agentId === selectedAgentId;
+    const matchSearch = !selectedDeviceSearch || 
+      d.id.toLowerCase().includes(selectedDeviceSearch.toLowerCase()) || 
+      d.serialNumber.toLowerCase().includes(selectedDeviceSearch.toLowerCase());
+    return matchAgent && matchSearch;
+  });
+
+  const totalPendingPages = Math.ceil(pendingCandidates.length / PENDING_PER_PAGE);
+  const pagedPending = pendingCandidates.slice((pendingPage - 1) * PENDING_PER_PAGE, pendingPage * PENDING_PER_PAGE);
+
+  const handleDeviceSelection = (d) => {
+    setSelectedDevice(d);
+    
+    // Auto-prepopulate customer detail from the sale record if it exists!
+    const saleItem = agentSaleItems.find(s => s.deviceId === d.id);
+    if (saleItem) {
+      setCustName(saleItem.customerName || '');
+      setCustPhone(saleItem.customerPhone || '');
+      setCarNumber(saleItem.carNumber || '');
+      setChassisNumber(saleItem.chassisNumber || '');
+    }
+  };
+
+  const handleRecordInstallation = async (e) => {
+    e.preventDefault();
+    if (!selectedDevice) {
+      showToast('Please pick a device from the pending installation list first.', 'danger');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_URL}/installations`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          deviceId: selectedDevice.id,
+          customerName: custName,
+          customerPhone: custPhone,
+          carNumber,
+          chassisNumber,
+          installedAt: installedDate
+        })
+      });
+      const d = await res.json();
+      if (res.ok) {
+        showToast('Installation logged successfully! Device status changed to INSTALLED.');
+        setSelectedDevice(null);
+        setSelectedDeviceSearch('');
+        setCustName(''); setCustPhone(''); setCarNumber(''); setChassisNumber(''); setInstalledDate(today());
+        load();
+      } else {
+        showToast(d.error || 'Failed recording installation', 'danger');
+      }
+    } catch {
+      showToast('Server network error', 'danger');
+    }
+  };
+
+  // Filter final installation registry table
+  const filteredInstallations = installations.filter(i => {
+    const matchSearch = !search ||
+      i.customerName?.toLowerCase().includes(search.toLowerCase()) ||
+      i.customerPhone?.includes(search) ||
+      i.deviceId?.toLowerCase().includes(search.toLowerCase()) ||
+      i.carNumber?.toLowerCase().includes(search.toLowerCase());
+    
+    const matchAgent = !filterAgent || i.agentId === filterAgent;
+    return matchSearch && matchAgent;
+  });
+
+  // Export installations sheet
+  const handleExportInstallations = () => {
+    const headers = ['Device IMEI', 'Customer Name', 'Customer Phone', 'Partner Dealer', 'Car Number', 'Chassis Number', 'Installed At'];
+    const rows = filteredInstallations.map(i => {
+      const partner = agents.find(a => a.id === i.agentId);
+      return [
+        i.deviceId,
+        i.customerName,
+        i.customerPhone,
+        partner?.name || 'Unknown',
+        i.carNumber,
+        i.chassisNumber,
+        new Date(i.installedAt).toLocaleDateString('en-IN')
+      ];
+    });
+    exportToCSV(headers, rows, `installations_registry_${today()}.csv`);
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Page Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Customer installations</p>
+            <h1 className="text-4xl font-semibold">Installations</h1>
+            <p className="text-sm text-slate-650 dark:text-slate-405 mt-1">Record and log devices marked as installed after a partner sale.</p>
+          </div>
+          <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+            Dashboard
+          </button>
+        </div>
+
+        {/* Complete Pending installations Stepper */}
+        {hasPerm('INSTALL') && (
+          <section className="rounded-3xl border border-slate-200 bg-slate-50 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 transition grid gap-6 md:grid-cols-2">
+            
+            {/* Step 1: Pick Device */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
+                <h3 className="text-base font-semibold">1. Select Device from Pending ({pendingCandidates.length})</h3>
+                <span className="text-xs text-slate-400 uppercase tracking-widest font-bold">Step 1 of 2</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select value={selectedAgentId} onChange={e => { setSelectedAgentId(e.target.value); setPendingPage(1); }}
+                  className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-xs outline-none">
+                  <option value="">Filter by Partner</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                <input 
+                  placeholder="Search IMEI or Serial..." 
+                  value={selectedDeviceSearch}
+                  onChange={e => { setSelectedDeviceSearch(e.target.value); setPendingPage(1); }}
+                  className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2 text-xs outline-none"
+                />
+              </div>
+              
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {pagedPending.map(d => {
+                  const saleItem = agentSaleItems.find(s => s.deviceId === d.id);
+                  const partner = agents.find(a => a.id === saleItem?.agentId);
+                  return (
+                    <button 
+                      key={d.id}
+                      type="button"
+                      onClick={() => handleDeviceSelection(d)}
+                      className={`w-full text-left p-3 rounded-2xl border transition flex flex-col justify-between gap-1 ${
+                        selectedDevice?.id === d.id 
+                          ? 'border-slate-950 bg-slate-950 text-white dark:border-white dark:bg-white dark:text-slate-950 shadow-md' 
+                          : 'border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 hover:bg-slate-50 dark:hover:bg-slate-900'
+                      }`}
+                    >
+                      <div className="flex justify-between items-center w-full">
+                        <span className="text-xs font-mono font-semibold">{d.id}</span>
+                        <span className="text-[10px] uppercase tracking-wider opacity-60">S/N: {d.serialNumber}</span>
+                      </div>
+                      <span className="text-xs font-semibold mt-1 opacity-95">Dealer Partner: {partner?.name || 'Unknown'}</span>
+                    </button>
+                  );
+                })}
+                {pagedPending.length === 0 && (
+                  <div className="text-center py-12 text-slate-400 text-xs font-semibold">No pending installations found for filters.</div>
+                )}
+              </div>
+
+              {/* Pagination for pending */}
+              {totalPendingPages > 1 && (
+                <div className="flex justify-between items-center text-xs text-slate-500 font-bold border-t border-slate-250 dark:border-slate-800 pt-3">
+                  <span>Showing {(pendingPage - 1) * PENDING_PER_PAGE + 1}–{Math.min(pendingPage * PENDING_PER_PAGE, pendingCandidates.length)} of {pendingCandidates.length}</span>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setPendingPage(p => Math.max(1, p - 1))} disabled={pendingPage === 1} className="underline disabled:opacity-40">Prev</button>
+                    <button type="button" onClick={() => setPendingPage(p => Math.min(totalPendingPages, p + 1))} disabled={pendingPage === totalPendingPages} className="underline disabled:opacity-40">Next</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Complete Details Form */}
+            <form onSubmit={handleRecordInstallation} className="space-y-4 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 md:pl-6 pt-4 md:pt-0">
+              <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
+                <h3 className="text-base font-semibold">2. Complete Installation Details</h3>
+                <span className="text-xs text-slate-400 uppercase tracking-widest font-bold">Step 2 of 2</span>
+              </div>
+              
+              {selectedDevice ? (
+                <div className="bg-slate-100 dark:bg-slate-950 p-3.5 rounded-2xl text-xs font-mono space-y-1">
+                  <p className="font-bold text-slate-900 dark:text-white">Active Device Selected:</p>
+                  <p>IMEI: {selectedDevice.id}</p>
+                  <p>Serial: {selectedDevice.serialNumber}</p>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 dark:bg-amber-950/20 dark:border-amber-900 p-4 rounded-2xl text-xs text-amber-800 dark:text-amber-400 font-medium">
+                  Please pick an IMEI from the left list to enable the details form.
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">Customer Name *</label>
+                  <input required placeholder="Name" disabled={!selectedDevice} value={custName} onChange={e => setCustName(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2.5 text-xs outline-none disabled:opacity-60" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">Customer Phone *</label>
+                  <input required placeholder="Phone" disabled={!selectedDevice} value={custPhone} onChange={e => setCustPhone(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2.5 text-xs outline-none disabled:opacity-60" />
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">Car Number *</label>
+                  <input required placeholder="e.g. UP15ET7631" disabled={!selectedDevice} value={carNumber} onChange={e => setCarNumber(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2.5 text-xs outline-none disabled:opacity-60" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">Chassis Number *</label>
+                  <input required placeholder="Chassis No." disabled={!selectedDevice} value={chassisNumber} onChange={e => setChassisNumber(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2.5 text-xs outline-none disabled:opacity-60" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">Date Installed *</label>
+                <input type="date" disabled={!selectedDevice} value={installedDate} onChange={e => setInstalledDate(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-2.5 text-xs outline-none disabled:opacity-60" />
+              </div>
+              <button 
+                type="submit" 
+                disabled={!selectedDevice}
+                className="w-full rounded-full bg-slate-950 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition disabled:opacity-50"
+              >
+                Complete Pending Installation
+              </button>
+            </form>
+          </section>
+        )}
+
+        {/* Installation Registry Database */}
+        <section className="space-y-4 rounded-3xl border border-slate-200/80 bg-white/90 p-6 shadow-sm shadow-slate-200/40 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90 dark:shadow-none transition">
+          
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 dark:border-slate-850 pb-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-semibold text-slate-950 dark:text-white">Installation Registry</h2>
+              <p className="text-sm text-slate-650 dark:text-slate-405">Review, search, and export logged customer installation records.</p>
+            </div>
+            <button onClick={handleExportInstallations} className="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Export Excel
+            </button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 rounded-3xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950 sm:flex-row sm:items-center sm:justify-between font-semibold">
+              <div className="flex flex-wrap items-center gap-4">
+                <select value={filterAgent} onChange={e => setFilterAgent(e.target.value)}
+                  className="rounded-2xl border border-slate-300 bg-white px-4 py-2 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100">
+                  <option value="">All Partners</option>
+                  {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">{filteredInstallations.length} records matching</div>
+              </div>
+              <input
+                placeholder="Search device, name, phone, car..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="w-full rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:w-64"
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Device IMEI</th>
+                    <th className="px-6 py-4">Customer Name</th>
+                    <th className="px-6 py-4">Phone</th>
+                    <th className="px-6 py-4">Partner</th>
+                    <th className="px-6 py-4">Car Number</th>
+                    <th className="px-6 py-4">Installed At</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredInstallations.map(inst => {
+                    const agent = agents.find(a => a.id === inst.agentId);
+                    return (
+                      <tr key={inst.id} className="transition hover:bg-slate-50 dark:hover:bg-slate-900/50">
+                        <td className="px-6 py-4 font-mono text-xs font-semibold">{inst.deviceId}</td>
+                        <td className="px-6 py-4 font-semibold text-slate-950 dark:text-white">{inst.customerName}</td>
+                        <td className="px-6 py-4">{inst.customerPhone}</td>
+                        <td className="px-6 py-4">{agent?.name || '—'}</td>
+                        <td className="px-6 py-4 font-semibold">{inst.carNumber}</td>
+                        <td className="px-6 py-4 text-xs font-mono">{fmtDate(inst.installedAt)}</td>
+                      </tr>
+                    );
+                  })}
+                  {filteredInstallations.length === 0 && (
+                    <tr><td colSpan={6} className="px-6 py-8 text-center text-slate-400">No installations registry log matches found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// REPORTS PAGE
+// ─────────────────────────────────────────────────────────────
+
+function ReportsPage({ hasPerm, nav, maskData, fmt, fmtDate }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState('this_month');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState(today());
+  const [companyId, setCompanyId] = useState('');
+  const [companies, setCompanies] = useState([]);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ range });
+      if (startDate) params.append('startDateStr', startDate);
+      if (endDate) params.append('endDateStr', endDate);
+      if (companyId) params.append('companyId', companyId);
+      
+      const res = await fetch(`${API_URL}/reports?${params}`, { headers: getHeaders() });
+      if (res.ok) setData(await res.json());
+
+      const cr = await fetch(`${API_URL}/companies`, { headers: getHeaders() });
+      if (cr.ok) {
+        const cd = await cr.json();
+        setCompanies(cd.companies || []);
+      }
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [range, companyId]);
+
+  const setRangePreset = (preset) => {
+    setRange(preset);
+    // Auto populate dates based on preset
+    const now = new Date();
+    if (preset === 'today') {
+      setStartDate(today());
+      setEndDate(today());
+    } else if (preset === 'this_week') {
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+      const start = new Date(now.setDate(diff));
+      setStartDate(start.toISOString().split('T')[0]);
+      setEndDate(today());
+    } else if (preset === 'this_month') {
+      setStartDate(new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]);
+      setEndDate(today());
+    }
+  };
+
+  if (loading) return <Loader />;
+
+  const { today: t, week: w, month: m, rangeTotals = {}, recentInstallations = [], dailyTrends = [] } = data || {};
+
+  const handleExportInstallations = () => {
+    const headers = ['Device', 'Customer Name', 'Customer Phone', 'Car Number', 'Installed At'];
+    const rows = recentInstallations.map(i => [
+      i.deviceId,
+      i.customerName,
+      i.customerPhone,
+      i.carNumber,
+      new Date(i.installedAt).toLocaleDateString('en-IN')
+    ]);
+    exportToCSV(headers, rows, `installations_report_${today()}.csv`);
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Page Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">Reports Dashboard</p>
+            <h1 className="text-4xl font-semibold">Business Summary</h1>
+            <p className="text-sm text-slate-500 mt-1">Lump sum metrics, range trends, daily snapshots, and CSV ledger reports.</p>
+          </div>
+          <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+            Dashboard
+          </button>
+        </div>
+
+        {/* Snapshot columns */}
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <h2 className="text-xl font-semibold mb-4">Report Periods</h2>
+          <div className="grid gap-6 md:grid-cols-3">
+            {[
+              { label: 'Today', data: t },
+              { label: 'This Week', data: w },
+              { label: 'This Month', data: m },
+            ].map(({ label, data: pd }) => (
+              <div key={label} className="rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 p-6 space-y-4">
+                <p className="text-xs uppercase tracking-[0.28em] text-slate-400 font-bold">{label}</p>
+                <div className="space-y-2 font-semibold">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Purchases:</span>
+                    <span>{fmt(pd?.purchases)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Sales:</span>
+                    <span>{fmt(pd?.sales)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm border-t border-slate-200 dark:border-slate-800 pt-2">
+                    <span className="text-slate-500">Profit:</span>
+                    <span className="text-green-600 dark:text-green-400">{fmt(pd?.profit)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Installations:</span>
+                    <span className="font-mono">{pd?.installations || 0}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Collections summary */}
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <h2 className="text-xl font-semibold mb-4">Collections & Outstanding Balances</h2>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-2xl bg-slate-50 dark:bg-slate-950 p-5 border border-slate-150 dark:border-slate-800">
+              <span className="text-xs text-slate-400 font-bold uppercase block">Company Payments Paid</span>
+              <span className="text-2xl font-bold text-slate-950 dark:text-white block mt-2">{fmt(rangeTotals.companyCollections)}</span>
+            </div>
+            <div className="rounded-2xl bg-slate-50 dark:bg-slate-950 p-5 border border-slate-150 dark:border-slate-800">
+              <span className="text-xs text-slate-400 font-bold uppercase block">Partner Collections Received</span>
+              <span className="text-2xl font-bold text-slate-950 dark:text-white block mt-2">{fmt(rangeTotals.agentCollections)}</span>
+            </div>
+            <div className="rounded-2xl bg-slate-50 dark:bg-slate-950 p-5 border border-slate-150 dark:border-slate-800">
+              <span className="text-xs text-slate-400 font-bold uppercase block">Pending Supplier Dues</span>
+              <span className="text-2xl font-bold text-red-600 dark:text-red-400 block mt-2">{fmt(rangeTotals.pendingCompany)}</span>
+            </div>
+            <div className="rounded-2xl bg-slate-50 dark:bg-slate-950 p-5 border border-slate-150 dark:border-slate-800">
+              <span className="text-xs text-slate-400 font-bold uppercase block">Partner Outstanding Due</span>
+              <span className="text-2xl font-bold text-red-600 dark:text-red-400 block mt-2">{fmt(rangeTotals.pendingPartners)}</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Custom Trends Chart (HTML + CSS line/bar representation) */}
+        <section className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90 transition space-y-4">
+          <div>
+            <h2 className="text-xl font-semibold text-slate-950 dark:text-white">Daily Trends</h2>
+            <p className="text-xs text-slate-500">Visualization of purchases, sales, and profits across selected range.</p>
+          </div>
+
+          <div className="flex flex-wrap gap-2 py-2">
+            {['today', 'this_week', 'this_month'].map(pr => (
+              <button 
+                key={pr} 
+                onClick={() => setRangePreset(pr)}
+                className={`rounded-full px-4 py-1.5 text-xs font-bold uppercase tracking-wider transition ${
+                  range === pr 
+                    ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' 
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                }`}
+              >
+                {pr.replace(/_/g, ' ')}
+              </button>
+            ))}
+            
+            <select value={companyId} onChange={e => setCompanyId(e.target.value)}
+              className="rounded-full border border-slate-300 bg-white px-4 py-1 text-xs outline-none focus:border-slate-400 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 ml-auto">
+              <option value="">All Companies</option>
+              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+
+          {/* Simple visual bar chart using SVG or styled divs */}
+          <div className="h-64 rounded-3xl bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-850 p-6 flex items-end gap-2 overflow-x-auto relative">
+            {dailyTrends.map((t, idx) => {
+              const maxVal = Math.max(...dailyTrends.map(d => Math.max(d.sales, d.purchases, 100)));
+              const salesHeight = (t.sales / maxVal) * 150;
+              const purchHeight = (t.purchases / maxVal) * 150;
+              return (
+                <div key={idx} className="flex flex-col items-center flex-1 min-w-[36px] group relative cursor-pointer">
+                  {/* Tooltip */}
+                  <div className="absolute bottom-full mb-2 bg-slate-950 text-white dark:bg-white dark:text-slate-950 rounded-lg p-2 text-[10px] hidden group-hover:block z-10 whitespace-nowrap shadow-md">
+                    <p className="font-semibold">{t.date}</p>
+                    <p>Sales: {fmt(t.sales)}</p>
+                    <p>Cost: {fmt(t.purchases)}</p>
+                    <p>Profit: {fmt(t.profit)}</p>
+                  </div>
+                  
+                  <div className="flex gap-1 items-end h-[160px] border-b border-slate-200 dark:border-slate-800 w-full justify-center">
+                    {/* Purchases Bar */}
+                    <div style={{ height: `${purchHeight}px` }} className="w-2.5 bg-red-400 rounded-t-sm" />
+                    {/* Sales Bar */}
+                    <div style={{ height: `${salesHeight}px` }} className="w-2.5 bg-green-500 rounded-t-sm" />
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-2 font-mono font-bold">{t.date}</span>
+                </div>
+              );
+            })}
+            {dailyTrends.length === 0 && (
+              <div className="absolute inset-0 flex items-center justify-center text-xs text-slate-400 font-semibold">No trend data available for current date range filters.</div>
+            )}
+          </div>
+          <div className="flex gap-4 text-xs font-semibold justify-center">
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 bg-red-400 rounded-sm" />
+              <span>Purchases (Cost)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 bg-green-500 rounded-sm" />
+              <span>Dealer Sales (Revenue)</span>
+            </div>
+          </div>
+        </section>
+
+        {/* Recent installations report list */}
+        <section className="space-y-4 rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900/90 transition">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 dark:border-slate-850 pb-4">
+            <div>
+              <h2 className="text-xl font-semibold">Range Installations</h2>
+              <p className="text-sm text-slate-500">{recentInstallations.length} total logged installations within period.</p>
+            </div>
+            {recentInstallations.length > 0 && (
+              <button onClick={handleExportInstallations} className="rounded-full bg-slate-950 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                Export Installations
+              </button>
+            )}
+          </div>
+
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+            <table className="min-w-full border-collapse text-left text-sm text-slate-700 dark:text-slate-300">
+              <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold">
+                <tr>
+                  <th className="px-6 py-4">Device ID (IMEI)</th>
+                  <th className="px-6 py-4">Customer</th>
+                  <th className="px-6 py-4">Phone</th>
+                  <th className="px-6 py-4">Car Number</th>
+                  <th className="px-6 py-4">Log Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {recentInstallations.map((inst, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition">
+                    <td className="px-6 py-4 font-mono text-xs font-semibold">{inst.deviceId}</td>
+                    <td className="px-6 py-4 font-semibold text-slate-950 dark:text-white">{inst.customerName}</td>
+                    <td className="px-6 py-4">{inst.customerPhone}</td>
+                    <td className="px-6 py-4 font-semibold">{inst.carNumber}</td>
+                    <td className="px-6 py-4 text-xs font-mono">{fmtDate(inst.installedAt)}</td>
+                  </tr>
+                ))}
+                {recentInstallations.length === 0 && (
+                  <tr><td colSpan={5} className="px-6 py-8 text-center text-slate-400">No installations recorded during this range.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// USERS PAGE
+// ─────────────────────────────────────────────────────────────
+
+const ALL_PERMS = [
+  'COMPANY', 'COMPANY_CREATE', 'COMPANY_DEVICE_ADD', 'COMPANY_PAYMENT', 'COMPANY_DETAILS',
+  'AGENTS', 'AGENT_CREATE', 'AGENT_SALE', 'AGENT_PAYMENT', 'AGENT_DETAILS',
+  'INVENTORY', 'INSTALL', 'USERS', 'REPORTS'
+];
+
+function UsersPage({ user, hasPerm, nav, showToast }) {
+  const [users, setUsers] = useState([]);
+  const [isFirstTime, setIsFirstTime] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Form states
+  const [uName, setUName] = useState('');
+  const [uMobile, setUMobile] = useState('');
+  const [uPwd, setUPwd] = useState('');
+  const [uRole, setURole] = useState('USER');
+  const [uPerms, setUPerms] = useState([]);
+
+  // Edit user access states
+  const [editingUserId, setEditingUserId] = useState(null);
+  const [editRole, setEditRole] = useState('USER');
   const [editPerms, setEditPerms] = useState([]);
 
-  const [alert, setAlert] = useState({ show: false, msg: '', type: '' });
-
-  const availablePermissions = [
-    'COMPANY', 'COMPANY_CREATE', 'COMPANY_DEVICE_ADD', 'COMPANY_PAYMENT', 'COMPANY_DETAILS',
-    'AGENTS', 'AGENT_CREATE', 'AGENT_SALE', 'AGENT_PAYMENT', 'AGENT_DETAILS',
-    'INVENTORY', 'INSTALL', 'USERS', 'REPORTS'
-  ];
-
-  const loadData = async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/users`, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users || []);
-        if (data.isFirstTimeSetup) {
-          setFirstTimeSetupAllowed(true);
-        } else {
-          setFirstTimeSetupAllowed(false);
-        }
-      } else if (res.status === 401 || res.status === 403) {
-        setFirstTimeSetupAllowed(false);
+        setIsFirstTime(data.isFirstTimeSetup || false);
       }
-    } catch (err) {
-      console.error(err);
-      setFirstTimeSetupAllowed(false);
-    } finally {
-      setLoading(false);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const togglePerm = (p) => {
+    setUPerms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  };
+
+  const toggleEditPerm = (p) => {
+    setEditPerms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  };
+
+  const submitUser = async (e) => {
+    e.preventDefault();
+    const res = await fetch(`${API_URL}/users`, {
+      method: 'POST', 
+      headers: getHeaders(),
+      body: JSON.stringify({ name: uName, mobile: uMobile, password: uPwd, role: uRole, permissions: uPerms }),
+    });
+    if (res.ok) { 
+      showToast('User created successfully'); 
+      setUName(''); setUMobile(''); setUPwd(''); setURole('USER'); setUPerms([]); 
+      load(); 
+    } else { 
+      const d = await res.json(); 
+      showToast(d.error || 'Failed adding user', 'danger'); 
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const triggerAlert = (msg, type = 'success') => {
-    setAlert({ show: true, msg, type });
-    setTimeout(() => setAlert({ show: false, msg: '', type: '' }), 5000);
+  const toggleDisable = async (uid, disabled) => {
+    if (!window.confirm(`Are you sure you want to ${disabled ? 'enable' : 'disable'} this account?`)) return;
+    try {
+      const res = await fetch(`${API_URL}/users/${uid}/disable`, {
+        method: 'PUT', 
+        headers: getHeaders(),
+        body: JSON.stringify({ disabled: !disabled }),
+      });
+      if (res.ok) { 
+        showToast(!disabled ? 'User disabled' : 'User enabled'); 
+        load(); 
+      } else { 
+        const d = await res.json(); 
+        showToast(d.error || 'Request failed', 'danger'); 
+      }
+    } catch {
+      showToast('Server update error', 'danger');
+    }
   };
 
-  const handleCreateUser = async (e) => {
+  const startEditAccess = (u) => {
+    setEditingUserId(u.id);
+    setEditRole(u.role);
+    setEditPerms(u.permissions || []);
+  };
+
+  const saveEditedAccess = async (e, uid) => {
     e.preventDefault();
     try {
-      const res = await fetch(`${API_URL}/users`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          name,
-          mobile,
-          password,
-          role,
-          permissions: selectedPermissions
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        triggerAlert('New user security profile created!');
-        setName('');
-        setMobile('');
-        setPassword('');
-        setRole('USER');
-        setSelectedPermissions([]);
-        loadData();
-      } else {
-        triggerAlert(data.error || 'Failed to create user', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  const handleToggleDisabled = async (userId, currentDisabled) => {
-    try {
-      const res = await fetch(`${API_URL}/users/${userId}/disable`, {
-        method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify({ disabled: !currentDisabled })
-      });
-      if (res.ok) {
-        triggerAlert('User security profile status toggled!');
-        loadData();
-      } else {
-        const data = await res.json();
-        triggerAlert(data.error || 'Operation failed', 'danger');
-      }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
-    }
-  };
-
-  const handleSaveRole = async (userId) => {
-    try {
-      const res = await fetch(`${API_URL}/users/${userId}/role`, {
+      const res = await fetch(`${API_URL}/users/${uid}/role`, {
         method: 'PUT',
         headers: getHeaders(),
         body: JSON.stringify({ role: editRole, permissions: editPerms })
       });
       if (res.ok) {
-        triggerAlert('Permissions updated successfully!');
-        setEditUserId(null);
-        loadData();
+        showToast('Permissions updated successfully!');
+        setEditingUserId(null);
+        load();
       } else {
-        const data = await res.json();
-        triggerAlert(data.error || 'Failed to save permissions', 'danger');
+        const d = await res.json();
+        showToast(d.error || 'Failed update', 'danger');
       }
-    } catch (err) {
-      triggerAlert('Network error', 'danger');
+    } catch {
+      showToast('Server error during update', 'danger');
     }
   };
 
-  const togglePermissionCheckbox = (perm, list, setter) => {
-    if (list.includes(perm)) {
-      setter(list.filter(p => p !== perm));
-    } else {
-      setter([...list, perm]);
-    }
-  };
-
-  if (isSetupMode && loading) {
-    return (
-      <div className="form-card animate-fade-up" style={{ textAlign: 'center', padding: '40px' }}>
-        <p className="card-subtitle">Checking system configuration status...</p>
-      </div>
-    );
-  }
-
-  if (isSetupMode && firstTimeSetupAllowed === false) {
-    return (
-      <div className="form-card animate-fade-up" style={{ display: 'flex', flexDirection: 'column', gap: '20px', textAlign: 'center' }}>
-        <div>
-          <h2 className="form-card-title" style={{ border: 'none', padding: 0, fontSize: '1.5rem', justifyContent: 'center', display: 'flex', color: 'var(--danger-text)' }}>Setup Locked</h2>
-          <p className="card-subtitle" style={{ marginTop: '10px' }}>An administrator account has already been registered on this system. First-time setup is disabled.</p>
-        </div>
-        <button type="button" onClick={() => setPath('/login')} className="btn btn-primary" style={{ width: '100%' }}>
-          Go to Login
-        </button>
-      </div>
-    );
-  }
-
-  if (isSetupMode) {
-    return (
-      <form className="form-card animate-fade-up" onSubmit={handleCreateUser}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', textAlign: 'center', marginBottom: '10px' }}>
-          <h2 className="form-card-title" style={{ border: 'none', padding: 0, fontSize: '1.75rem', justifyContent: 'center', display: 'flex' }}>First-Time Setup</h2>
-          <p className="card-subtitle">Create the primary administrator account to get started.</p>
-        </div>
-
-        {alert.show && (
-          <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-            {alert.msg}
-          </div>
-        )}
-
-        <div className="form-group">
-          <label className="form-label">Full Name</label>
-          <input 
-            type="text" 
-            required 
-            placeholder="Enter full name" 
-            className="form-input" 
-            value={name}
-            onChange={e => setName(e.target.value)}
-          />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Mobile/Username</label>
-          <input 
-            type="text" 
-            required 
-            placeholder="Enter mobile number" 
-            className="form-input" 
-            value={mobile}
-            onChange={e => setMobile(e.target.value)}
-          />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Password</label>
-          <input 
-            type="password" 
-            required 
-            placeholder="Enter secure password" 
-            className="form-input" 
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-          />
-        </div>
-
-        <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }}>
-          Register Administrator
-        </button>
-
-        <button type="button" onClick={() => setPath('/login')} className="btn btn-secondary" style={{ width: '100%' }}>
-          Back to Login
-        </button>
-      </form>
-    );
-  }
+  if (loading) return <Loader />;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">User Access Control</p>
-          <h1 className="page-title">User Management</h1>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Back to Dashboard
-        </button>
-      </div>
-
-      {alert.show && (
-        <div className={`alert alert-${alert.type === 'danger' ? 'danger' : 'success'}`}>
-          {alert.msg}
-        </div>
-      )}
-
-      {/* Form: Create user */}
-      {hasPerm('USERS') && (
-        <section className="card-section" style={{ margin: 0 }}>
-          <div className="card-title-group">
-            <h2 className="card-title" style={{ fontSize: '1.5rem' }}>Create New User</h2>
-            <p className="card-subtitle">Add users with mobile number, password, role, and permission controls.</p>
+    <main className="min-h-screen bg-slate-100 dark:bg-slate-950 px-6 py-8 transition-colors text-slate-900 dark:text-slate-100">
+      <div className="mx-auto max-w-7xl space-y-10">
+        
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between border-b border-slate-200 dark:border-slate-800 pb-6">
+          <div>
+            <p className="text-sm uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400">User Access Control</p>
+            <h1 className="text-4xl font-semibold">User Management</h1>
           </div>
-          <form className="mt-6" style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(2, 1fr)' }} onSubmit={handleCreateUser}>
-            <div className="form-group">
-              <label className="form-label">Name</label>
-              <input 
-                type="text" 
-                required 
-                className="form-input" 
-                value={name}
-                onChange={e => setName(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Username/Mobile</label>
-              <input 
-                type="text" 
-                required 
-                className="form-input" 
-                value={mobile}
-                onChange={e => setMobile(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input 
-                type="password" 
-                required 
-                className="form-input" 
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-              />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Role</label>
-              <select 
-                className="form-select"
-                value={role}
-                onChange={e => setRole(e.target.value)}
-              >
-                <option value="USER">USER</option>
-                <option value="ADMIN">ADMIN</option>
-              </select>
-            </div>
-            <div className="form-group" style={{ gridColumn: 'span 2' }}>
-              <label className="form-label">Permissions</label>
-              <div className="permissions-checkbox-group" style={{ marginTop: '8px' }}>
-                {availablePermissions.map(perm => (
-                  <label key={perm} className="checkbox-label">
-                    <input 
-                      type="checkbox" 
-                      checked={selectedPermissions.includes(perm)}
-                      onChange={() => togglePermissionCheckbox(perm, selectedPermissions, setSelectedPermissions)}
-                    />
-                    {perm.replace(/_/g, ' ')}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <button type="submit" className="btn btn-primary" style={{ gridColumn: 'span 2' }}>
-              Create User
+          {!isFirstTime && (
+            <button onClick={() => nav('/')} className="rounded-full bg-slate-950 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+              Dashboard
             </button>
-          </form>
-        </section>
-      )}
-
-      {/* Users table */}
-      <section className="card-section">
-        <div className="card-title-group">
-          <h2 className="card-title">Active Security Profiles</h2>
+          )}
         </div>
 
-        {loading ? (
-          <p>Loading security list...</p>
-        ) : (
-          <div className="table-wrapper">
-            <table className="custom-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Mobile</th>
-                  <th>Role</th>
-                  <th>Permissions</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td style={{ fontWeight: 600 }}>{u.name || '-'}</td>
-                    <td>{u.mobile}</td>
-                    <td>{u.role}</td>
-                    <td>
-                      {u.role === 'ADMIN' ? (
-                        <span style={{ color: 'var(--success-text)', fontWeight: 600 }}>All access</span>
-                      ) : (
-                        u.permissions.join(', ') || 'No permissions'
-                      )}
-                    </td>
-                    <td>
-                      <span className={`status-badge ${!u.disabled ? 'installed' : ''}`} style={{ border: 'none' }}>
-                        {u.disabled ? 'Disabled' : 'Active'}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="user-action-cell">
-                        <button 
-                          className={`btn ${u.disabled ? 'btn-primary' : 'btn-secondary'}`} 
-                          style={{ padding: '6px 12px', fontSize: '0.75rem', alignSelf: 'flex-start' }}
-                          onClick={() => handleToggleDisabled(u.id, u.disabled)}
-                        >
-                          {u.disabled ? 'Enable' : 'Disable'}
-                        </button>
+        {/* Create Form */}
+        {(isFirstTime || hasPerm('USERS')) && (
+          <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 transition">
+            <h2 className="text-2xl font-semibold">{isFirstTime ? 'Create First Admin Account' : 'Create New User'}</h2>
+            <p className="mt-2 text-sm text-slate-650 dark:text-slate-400">Setup profiles with custom permission sets. Blocked accounts cannot sign in.</p>
+            
+            <form onSubmit={submitUser} className="mt-6 space-y-6">
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="space-y-1 block">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Full Name *</span>
+                  <input required placeholder="Name" value={uName} onChange={e => setUName(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-350 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-900 dark:text-white" />
+                </label>
+                <label className="space-y-1 block">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Mobile Number *</span>
+                  <input required placeholder="Used as username login" value={uMobile} onChange={e => setUMobile(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-350 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-900 dark:text-white" />
+                </label>
+                <label className="space-y-1 block">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Password *</span>
+                  <input required type="password" placeholder="Min 6 characters" value={uPwd} onChange={e => setUPwd(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-350 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-900 dark:text-white" />
+                </label>
+              </div>
 
-                        {/* Expand permission editor */}
-                        {editUserId === u.id ? (
-                          <div className="form-card" style={{ padding: '16px', gap: '12px', marginTop: '8px' }}>
-                            <div className="form-group">
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Role</label>
-                              <select 
-                                className="form-select" 
-                                style={{ padding: '6px 10px' }}
-                                value={editRole}
-                                onChange={e => setEditRole(e.target.value)}
-                              >
-                                <option value="USER">USER</option>
-                                <option value="ADMIN">ADMIN</option>
-                              </select>
-                            </div>
-                            <div className="form-group">
-                              <label className="form-label" style={{ fontSize: '0.75rem' }}>Edit Permissions</label>
-                              <div className="permissions-checkbox-group" style={{ gridTemplateColumns: '1fr', padding: '10px' }}>
-                                {availablePermissions.map(perm => (
-                                  <label key={perm} className="checkbox-label" style={{ fontSize: '0.7rem' }}>
-                                    <input 
-                                      type="checkbox" 
-                                      checked={editPerms.includes(perm)}
-                                      onChange={() => togglePermissionCheckbox(perm, editPerms, setEditPerms)}
-                                    />
-                                    {perm}
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button 
-                                className="btn btn-primary" 
-                                style={{ padding: '6px 12px', fontSize: '0.75rem' }}
-                                onClick={() => handleSaveRole(u.id)}
-                              >
-                                Save Role
-                              </button>
-                              <button 
-                                className="btn btn-secondary" 
-                                style={{ padding: '6px 12px', fontSize: '0.75rem' }}
-                                onClick={() => setEditUserId(null)}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button 
-                            className="btn btn-secondary"
-                            style={{ padding: '6px 12px', fontSize: '0.75rem', alignSelf: 'flex-start' }}
-                            onClick={() => {
-                              setEditUserId(u.id);
-                              setEditRole(u.role);
-                              setEditPerms(u.permissions);
-                            }}
-                          >
-                            Edit Permissions
-                          </button>
-                        )}
+              {!isFirstTime && (
+                <div className="grid gap-6 md:grid-cols-3 border-t border-slate-100 dark:border-slate-850 pt-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">System Role</label>
+                    <select value={uRole} onChange={e => setURole(e.target.value)}
+                      className="rounded-2xl border border-slate-350 bg-white dark:border-slate-800 dark:bg-slate-950 px-4 py-3 text-sm outline-none focus:border-slate-900">
+                      <option value="USER">Standard User</option>
+                      <option value="ADMIN">Administrator</option>
+                    </select>
+                  </div>
+                  
+                  {uRole === 'USER' && (
+                    <div className="md:col-span-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Permission Set</label>
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                        {ALL_PERMS.map(p => (
+                          <label key={p} className="inline-flex items-center gap-2.5 text-xs font-semibold cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={uPerms.includes(p)} 
+                              onChange={() => togglePerm(p)}
+                              className="h-4 w-4 rounded border-slate-350 text-slate-900"
+                            />
+                            {p.replace(/_/g, ' ')}
+                          </label>
+                        ))}
                       </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <button type="submit" className="rounded-full bg-slate-950 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-950 dark:hover:bg-slate-200 transition">
+                {isFirstTime ? 'Create Administrator Account' : 'Save User Account'}
+              </button>
+            </form>
+          </section>
         )}
-      </section>
-    </div>
+
+        {/* Directory List */}
+        {!isFirstTime && (
+          <section className="space-y-4">
+            <h2 className="text-2xl font-semibold">Users Directory</h2>
+            <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+              <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-sm">
+                <thead className="bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 font-semibold font-semibold">
+                  <tr>
+                    <th className="px-6 py-4">Name</th>
+                    <th className="px-6 py-4">Mobile</th>
+                    <th className="px-6 py-4">Role</th>
+                    <th className="px-6 py-4 text-xs tracking-wider uppercase">Permissions</th>
+                    <th className="px-6 py-4">Status</th>
+                    {hasPerm('USERS') && <th className="px-6 py-4">Actions</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {users.map(u => (
+                    <tr key={u.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/50 transition">
+                      <td className="px-6 py-4 font-semibold text-slate-950 dark:text-white">{u.name}</td>
+                      <td className="px-6 py-4 font-mono">{u.mobile}</td>
+                      <td className="px-6 py-4 font-semibold">
+                        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          u.role === 'ADMIN' ? 'bg-slate-950 text-white dark:bg-white dark:text-slate-950' : 'bg-slate-100 text-slate-650 dark:bg-slate-800 dark:text-slate-400'
+                        }`}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 max-w-sm truncate text-xs font-semibold text-slate-500">
+                        {u.role === 'ADMIN' ? 'All Permissions Granted' : (u.permissions || []).join(', ')}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-bold uppercase tracking-wider ${
+                          u.disabled ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-400' : 'bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-400'
+                        }`}>
+                          {u.disabled ? 'Blocked' : 'Active'}
+                        </span>
+                      </td>
+                      {hasPerm('USERS') && (
+                        <td className="px-6 py-4 space-y-2">
+                          {u.id !== user?.id && editingUserId !== u.id && (
+                            <div className="flex gap-2">
+                              <button 
+                                onClick={() => startEditAccess(u)}
+                                className="rounded-full border border-slate-300 px-3.5 py-1 text-xs font-semibold hover:bg-slate-100 transition"
+                              >
+                                Edit Access
+                              </button>
+                              <button 
+                                onClick={() => toggleDisable(u.id, u.disabled)}
+                                className={`rounded-full border px-3.5 py-1 text-xs font-semibold transition ${
+                                  u.disabled 
+                                    ? 'border-green-300 bg-green-50 text-green-700 hover:bg-green-100 dark:border-green-950 dark:bg-green-950/20' 
+                                    : 'border-red-350 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-950 dark:bg-red-950/20'
+                                }`}
+                              >
+                                {u.disabled ? 'Unblock' : 'Block'}
+                              </button>
+                            </div>
+                          )}
+
+                          {editingUserId === u.id && (
+                            <form onSubmit={(e) => saveEditedAccess(e, u.id)} className="p-4 rounded-2xl border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950 space-y-4 animate-fade-in max-w-sm">
+                              <div>
+                                <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-1">System Role</label>
+                                <select value={editRole} onChange={e => setEditRole(e.target.value)}
+                                  className="w-full rounded-xl border border-slate-350 bg-white px-3 py-2 text-xs outline-none">
+                                  <option value="USER">USER</option>
+                                  <option value="ADMIN">ADMIN</option>
+                                </select>
+                              </div>
+                              {editRole === 'USER' && (
+                                <div className="space-y-1">
+                                  <label className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider mb-2">Permissions</label>
+                                  <div className="grid gap-1.5 grid-cols-2">
+                                    {ALL_PERMS.map(p => (
+                                      <label key={p} className="inline-flex items-center gap-1.5 text-[10px] font-bold tracking-tight cursor-pointer">
+                                        <input 
+                                          type="checkbox" 
+                                          checked={editPerms.includes(p)}
+                                          onChange={() => toggleEditPerm(p)}
+                                          className="h-3.5 w-3.5 rounded border-slate-355"
+                                        />
+                                        {p.replace(/_/g, ' ')}
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              <div className="flex gap-2 pt-2">
+                                <button type="submit" className="rounded-full bg-slate-950 text-white px-4 py-2 text-xs font-semibold hover:bg-slate-800">
+                                  Save Set
+                                </button>
+                                <button type="button" onClick={() => setEditingUserId(null)} className="rounded-full border border-slate-350 px-4 py-2 text-xs font-semibold hover:bg-slate-100">
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+      </div>
+    </main>
   );
 }
 
-// ==========================================
-// 9. REPORTS & PROFIT CARD VIEW
-// ==========================================
-function ReportsView({ hasPerm, setPath, user }) {
-  const [data, setData] = useState(null);
-  const [companies, setCompanies] = useState([]);
-  const [loading, setLoading] = useState(true);
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
 
-  // Filter States
-  const [range, setRange] = useState('month'); // 'today' | 'week' | 'month' | 'last7' | 'last30' | 'custom'
-  const [startDateStr, setStartDateStr] = useState('');
-  const [endDateStr, setEndDateStr] = useState('');
-  const [companyId, setCompanyId] = useState('ALL');
-
-  // Installations Registry filter inside Reports
-  const [installSearch, setInstallSearch] = useState('');
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      // Fetch companies for select filter
-      const compRes = await fetch(`${API_URL}/companies`, { headers: getHeaders() });
-      if (compRes.ok) {
-        const compData = await compRes.json();
-        setCompanies(compData.companies || []);
-      }
-
-      // Build reports URL with query filters
-      const queryParams = new URLSearchParams();
-      queryParams.append('range', range);
-      if (range === 'custom') {
-        if (startDateStr) queryParams.append('startDateStr', startDateStr);
-        if (endDateStr) queryParams.append('endDateStr', endDateStr);
-      }
-      if (companyId && companyId !== 'ALL') {
-        queryParams.append('companyId', companyId);
-      }
-
-      const res = await fetch(`${API_URL}/reports?${queryParams.toString()}`, { headers: getHeaders() });
-      if (res.ok) {
-        const resData = await res.json();
-        setData(resData);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-  }, [range, startDateStr, endDateStr, companyId]);
-
-  if (loading && !data) return <p style={{ padding: '24px' }}>Loading reports...</p>;
-  if (!data) return <p style={{ padding: '24px' }}>Error loading reports dashboard.</p>;
-
-  // Helper for trend chart max limit resolution
-  const trends = data.dailyTrends || [];
-  const maxVal = Math.max(...trends.map(t => Math.max(t.sales, t.purchases)), 1000);
-
-  // Local filter for installations list inside timeframe
-  const filteredInsts = (data.recentInstallations || []).filter(inst => {
-    if (!installSearch) return true;
-    const s = installSearch.toLowerCase();
-    return inst.deviceId.toLowerCase().includes(s) || 
-           inst.customerName.toLowerCase().includes(s) || 
-           (inst.carNumber && inst.carNumber.toLowerCase().includes(s));
-  });
-
-  const handleExportInstallations = () => {
-    const headers = ['Device ID', 'Customer Name', 'Contact Phone', 'Car Number', 'Chassis Number', 'Installed Date', 'Remarks'];
-    const rows = filteredInsts.map(inst => [
-      inst.deviceId,
-      inst.customerName,
-      inst.customerPhone,
-      inst.carNumber,
-      inst.chassisNumber,
-      formatDate(inst.installedAt),
-      inst.remarks
-    ]);
-    exportToExcel(headers, rows, 'Range_Installations_Report.csv');
-  };
-
+function Loader() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '32px' }}>
-      {/* Page Header */}
-      <div className="page-header">
-        <div className="page-title-group">
-          <p className="page-category">Reports</p>
-          <h1 className="page-title">Business Snapshots</h1>
-          <p className="card-subtitle">Period snapshots for today, this week, and this month — plus interactive range filters, daily trend charts, and installation listings.</p>
-        </div>
-        <button onClick={() => setPath('/')} className="btn btn-secondary">
-          Dashboard
-        </button>
-      </div>
-
-      {/* Snapshots Grid */}
-      <section className="card-section" style={{ margin: 0 }}>
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-          <h2 className="card-title">Timeframe Summaries</h2>
-          <p className="card-subtitle">Lifetime snapshots for today, this week, and this month.</p>
-        </div>
-
-        <div style={{ display: 'grid', gap: '24px', gridTemplateColumns: 'repeat(3, 1fr)' }}>
-          {/* Card Today */}
-          <div className="form-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <p className="page-category" style={{ margin: 0 }}>Today</p>
-            <h2 className="card-title" style={{ fontSize: '1.4rem' }}>{new Date().toLocaleDateString('en-IN')}</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Purchases</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.today.purchases)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Sales</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.today.sales)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Profit</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem', color: data.today.profit >= 0 ? 'var(--success-text)' : 'var(--danger-text)' }}>
-                  {formatCurrency(data.today.profit)}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                {data.today.installations} installation(s) completed
-              </div>
-            </div>
-          </div>
-
-          {/* Card This Week */}
-          <div className="form-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <p className="page-category" style={{ margin: 0 }}>This Week</p>
-            <h2 className="card-title" style={{ fontSize: '1.4rem' }}>Monday — Today</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Purchases</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.week.purchases)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Sales</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.week.sales)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Profit</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem', color: data.week.profit >= 0 ? 'var(--success-text)' : 'var(--danger-text)' }}>
-                  {formatCurrency(data.week.profit)}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                {data.week.installations} installation(s) completed
-              </div>
-            </div>
-          </div>
-
-          {/* Card This Month */}
-          <div className="form-card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <p className="page-category" style={{ margin: 0 }}>This Month</p>
-            <h2 className="card-title" style={{ fontSize: '1.4rem' }}>1st — Today</h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Purchases</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.month.purchases)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Sales</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem' }}>{formatCurrency(data.month.sales)}</span>
-              </div>
-              <div className="stat-card" style={{ padding: '12px 16px', border: '1px solid var(--border)', gap: '2px' }}>
-                <span className="stat-label" style={{ fontSize: '0.65rem' }}>Profit</span>
-                <span className="stat-value" style={{ fontSize: '1.25rem', color: data.month.profit >= 0 ? 'var(--success-text)' : 'var(--danger-text)' }}>
-                  {formatCurrency(data.month.profit)}
-                </span>
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', textAlign: 'center' }}>
-                {data.month.installations} installation(s) completed
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Interactive Filters Panel */}
-      <section className="card-section" style={{ margin: 0 }}>
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-          <h2 className="card-title">Interactive Filtered Analysis</h2>
-          <p className="card-subtitle">Customize the reporting date range and product supplier company filters to audit trends.</p>
-        </div>
-
-        {/* Filters bar */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', alignItems: 'flex-end', marginBottom: '24px' }}>
-          <div className="form-group" style={{ minWidth: '150px' }}>
-            <label className="form-label">Period timeframe</label>
-            <select className="form-select" value={range} onChange={e => setRange(e.target.value)}>
-              <option value="today">Today</option>
-              <option value="week">This week</option>
-              <option value="month">This month</option>
-              <option value="last7">Last 7 days</option>
-              <option value="last30">Last 30 days</option>
-              <option value="custom">Custom date range</option>
-            </select>
-          </div>
-
-          {range === 'custom' && (
-            <>
-              <div className="form-group">
-                <label className="form-label">From Date</label>
-                <input type="date" className="form-input" value={startDateStr} onChange={e => setStartDateStr(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label className="form-label">To Date</label>
-                <input type="date" className="form-input" value={endDateStr} onChange={e => setEndDateStr(e.target.value)} />
-              </div>
-            </>
-          )}
-
-          <div className="form-group" style={{ minWidth: '180px' }}>
-            <label className="form-label">Supplier Company Filter</label>
-            <select className="form-select" value={companyId} onChange={e => setCompanyId(e.target.value)}>
-              <option value="ALL">All suppliers</option>
-              {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </div>
-
-          <button onClick={loadData} className="btn btn-primary">Apply Filters</button>
-        </div>
-
-        {/* Range summary stats */}
-        <div className="stats-grid" style={{ display: 'grid', gap: '16px', gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: '32px' }}>
-          <div className="stat-card">
-            <span className="stat-label">RANGE PURCHASES</span>
-            <span className="stat-value">{formatCurrency(data.rangeTotals.purchases)}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">RANGE SALES</span>
-            <span className="stat-value">{formatCurrency(data.rangeTotals.sales)}</span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">RANGE PROFIT</span>
-            <span className="stat-value" style={{ color: data.rangeTotals.profit >= 0 ? 'var(--success-text)' : 'var(--danger-text)' }}>
-              {formatCurrency(data.rangeTotals.profit)}
-            </span>
-          </div>
-          <div className="stat-card">
-            <span className="stat-label">INSTALLATIONS</span>
-            <span className="stat-value">{data.rangeTotals.installationsCount}</span>
-          </div>
-        </div>
-
-        {/* Collections in Range */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
-          <div className="form-card" style={{ padding: '20px' }}>
-            <h4 style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              Supplier Payments Collection
-            </h4>
-            <div style={{ fontSize: '1.6rem', fontWeight: 700 }}>
-              {formatCurrency(data.companyCollections)}
-            </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Total paid to supplier companies in this timeframe. Outstanding lifetime company due: <span style={{ fontWeight: 600 }}>{formatCurrency(data.pendingCompany)}</span>
-            </p>
-          </div>
-          <div className="form-card" style={{ padding: '20px' }}>
-            <h4 style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-              Sub-dealer collections
-            </h4>
-            <div style={{ fontSize: '1.6rem', fontWeight: 700 }}>
-              {formatCurrency(data.agentCollections)}
-            </div>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Total collected from partners in this timeframe. Outstanding lifetime partner due: <span style={{ fontWeight: 600, color: 'var(--danger-text)' }}>{formatCurrency(data.pendingPayments)}</span>
-            </p>
-          </div>
-        </div>
-
-        {/* Dynamic Custom CSS Trend Chart */}
-        <div>
-          <h3 style={{ fontWeight: 600, fontSize: '1.05rem', marginBottom: '16px' }}>Daily Activity trends</h3>
-          {trends.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '30px' }}>
-              No data points available for trend analysis
-            </p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-end', height: '200px', gap: '12px', borderBottom: '1px solid var(--border)', paddingBottom: '10px', overflowX: 'auto' }}>
-                {trends.map((t, idx) => {
-                  const saleHeight = ((t.sales / maxVal) * 100) || 2;
-                  const purchHeight = ((t.purchases / maxVal) * 100) || 2;
-                  return (
-                    <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexGrow: 1, minWidth: '40px', gap: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: '4px', height: '150px', width: '100%', justifyContent: 'center' }}>
-                        {/* Purchase column */}
-                        <div 
-                          style={{ width: '8px', height: `${purchHeight}%`, background: 'var(--primary)', borderRadius: '4px 4px 0 0' }} 
-                          title={`${t.date} Purchases: ₹${t.purchases}`}
-                        />
-                        {/* Sales column */}
-                        <div 
-                          style={{ width: '8px', height: `${saleHeight}%`, background: '#f59e0b', borderRadius: '4px 4px 0 0' }} 
-                          title={`${t.date} Sales: ₹${t.sales} (Profit: ₹${t.profit})`}
-                        />
-                      </div>
-                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{t.date}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              <div style={{ display: 'flex', gap: '20px', fontSize: '0.8rem', justifyContent: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ display: 'inline-block', width: '10px', height: '10px', background: 'var(--primary)', borderRadius: '2px' }} />
-                  Purchases
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ display: 'inline-block', width: '10px', height: '10px', background: '#f59e0b', borderRadius: '2px' }} />
-                  Sales
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Installations registry inside filtered timeframe */}
-      <section className="card-section">
-        <div className="card-title-group" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '12px', marginBottom: '20px' }}>
-          <h2 className="card-title">Installation Registry for Selected timeframe</h2>
-          <p className="card-subtitle">List of vehicle tracker installations completed during the active filter timeframe.</p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '16px', marginBottom: '20px', alignItems: 'center' }}>
-          <input 
-            placeholder="Search installations by IMEI or Customer Name..."
-            className="form-input"
-            style={{ flexGrow: 1 }}
-            value={installSearch}
-            onChange={e => setInstallSearch(e.target.value)}
-          />
-          <button onClick={handleExportInstallations} className="btn btn-secondary">
-            Export Excel
-          </button>
-        </div>
-
-        <div className="table-wrapper">
-          <table className="custom-table">
-            <thead>
-              <tr>
-                <th>Device IMEI</th>
-                <th>Customer details</th>
-                <th>Phone Number</th>
-                <th>Vehicle / Car No.</th>
-                <th>Chassis No.</th>
-                <th>Installed Date</th>
-                <th>Remarks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredInsts.length === 0 ? (
-                <tr>
-                  <td colSpan="7" style={{ textAlign: 'center' }}>No installations found matching date-range and search</td>
-                </tr>
-              ) : (
-                filteredInsts.map((inst, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 600 }}>{inst.deviceId}</td>
-                    <td>{inst.customerName}</td>
-                    <td>{inst.customerPhone}</td>
-                    <td>{inst.carNumber}</td>
-                    <td>{inst.chassisNumber}</td>
-                    <td>{formatDate(inst.installedAt)}</td>
-                    <td>{inst.remarks || '—'}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+    <div className="flex items-center justify-center min-h-[60vh]">
+      <div className="w-10 h-10 border-4 border-slate-200 border-t-slate-950 rounded-full animate-spin dark:border-slate-800 dark:border-t-white" />
     </div>
   );
 }
